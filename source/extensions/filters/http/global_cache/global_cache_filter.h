@@ -50,6 +50,11 @@ class GlobalCacheFilterConfig {
 public:
   GlobalCacheFilterConfig(
       const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config);
+
+  std::chrono::milliseconds singleFlightTimeout() const { return single_flight_timeout_; }
+
+private:
+  std::chrono::milliseconds single_flight_timeout_;
 };
 
 using GlobalCacheFilterConfigSharedPtr = std::shared_ptr<GlobalCacheFilterConfig>;

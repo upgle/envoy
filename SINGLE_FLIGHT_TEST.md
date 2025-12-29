@@ -205,3 +205,96 @@ Global_cache 필터가 동작하지 않는 것입니다:
 - Backend load: 5배 증가
 
 **결론**: Single-flight 패턴은 동일한 응답 시간을 유지하면서 backend 부하를 크게 줄입니다.
+
+## Single-Flight Timeout 설정
+
+### Timeout 설정 방법
+
+Envoy 설정 파일에서 timeout을 지정할 수 있습니다:
+
+```yaml
+http_filters:
+- name: envoy.filters.http.global_cache
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCache
+    # Single-flight timeout (default: 5 seconds)
+    single_flight_timeout:
+      seconds: 1
+      nanos: 0
+```
+
+### Timeout의 목적
+
+Single-flight timeout은 다음 상황을 방지합니다:
+- 첫 번째 요청이 매우 느리거나 실패할 때
+- 대기 중인 요청들이 무한정 블록되는 것
+
+Timeout이 발생하면:
+1. 대기 중인 요청이 타임아웃
+2. 해당 요청이 독립적으로 upstream으로 전송
+3. Backend 부하는 증가하지만, 응답 시간은 보장됨
+
+### Timeout 테스트
+
+**터미널 1 - Very Slow Backend (3초 지연):**
+```bash
+chmod +x very_slow_backend.py
+python3 very_slow_backend.py
+```
+
+**터미널 2 - Envoy (1초 timeout):**
+```bash
+bazel-bin/source/exe/envoy-static -c test_global_cache_with_timeout.yaml -l debug
+```
+
+**터미널 3 - Timeout 테스트:**
+```bash
+chmod +x test_timeout.py
+python3 test_timeout.py
+```
+
+### 예상 결과 (Timeout 발생)
+
+**클라이언트 출력:**
+```
+Request 1: status=200, x-cache=MISS, duration=3.005s    ← 첫 요청, 3초 대기
+Request 2: status=200, x-cache=MISS, duration=1.102s    ← Timeout 후 upstream
+Request 3: status=200, x-cache=MISS, duration=1.105s    ← Timeout 후 upstream
+Request 4: status=200, x-cache=MISS, duration=1.108s    ← Timeout 후 upstream
+Request 5: status=200, x-cache=MISS, duration=1.110s    ← Timeout 후 upstream
+
+✅ SUCCESS: Timeout behavior is working correctly!
+```
+
+**Backend 로그:**
+```
+Backend: Request #1 arrived    ← 첫 번째
+Backend: Request #2 arrived    ← Timeout으로 독립 요청
+Backend: Request #3 arrived    ← Timeout으로 독립 요청
+Backend: Request #4 arrived    ← Timeout으로 독립 요청
+Backend: Request #5 arrived    ← Timeout으로 독립 요청
+```
+
+**Envoy Debug 로그:**
+```
+[info] global_cache: cache MISS for key: ... - sending to upstream
+[info] global_cache: WAITING for in-flight request for key: ...
+[warn] global_cache: timeout waiting for in-flight request for key: ... - proceeding to upstream
+[warn] global_cache: timeout waiting for in-flight request for key: ... - proceeding to upstream
+[warn] global_cache: timeout waiting for in-flight request for key: ... - proceeding to upstream
+```
+
+### Timeout 값 선택 가이드
+
+| Backend 응답 시간 | 권장 Timeout | 이유 |
+|------------------|-------------|------|
+| ~100ms | 200ms | 2배 여유 |
+| ~500ms | 1s | 2배 여유 |
+| ~1s | 2-3s | 2-3배 여유 |
+| ~2s | 5s (기본값) | 2.5배 여유 |
+| 매우 가변적 | 5-10s | 최악의 경우 고려 |
+
+**원칙:**
+- Timeout은 평균 응답 시간의 2-3배로 설정
+- 너무 짧으면: Single-flight 효과 감소 (timeout 빈발)
+- 너무 길면: 느린 요청 시 대기 시간 증가

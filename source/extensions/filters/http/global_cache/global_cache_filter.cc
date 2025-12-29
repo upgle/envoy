@@ -18,8 +18,14 @@ std::unordered_map<std::string, std::shared_ptr<InFlightRequest>> GlobalCacheFil
 std::mutex GlobalCacheFilter::in_flight_mutex_;
 
 GlobalCacheFilterConfig::GlobalCacheFilterConfig(
-    const envoy::extensions::filters::http::global_cache::v3::GlobalCache&) {
-  // No configuration needed
+    const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config) {
+  // Read single-flight timeout from config, default to 5 seconds
+  if (proto_config.has_single_flight_timeout()) {
+    single_flight_timeout_ = std::chrono::milliseconds(
+        PROTOBUF_GET_MS_REQUIRED(proto_config, single_flight_timeout));
+  } else {
+    single_flight_timeout_ = std::chrono::milliseconds(5000); // 5 seconds default
+  }
 }
 
 GlobalCacheFilter::GlobalCacheFilter(GlobalCacheFilterConfigSharedPtr config)
@@ -124,9 +130,17 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
   }
 
   if (!is_first_request) {
-    // Wait for the first request to complete
+    // Wait for the first request to complete with timeout
     std::unique_lock<std::mutex> lock(in_flight_mutex_);
-    in_flight->cv.wait(lock, [&in_flight] { return in_flight->completed; });
+    auto timeout = config_->singleFlightTimeout();
+    bool completed = in_flight->cv.wait_for(lock, timeout, [&in_flight] { return in_flight->completed; });
+
+    if (!completed) {
+      // Timeout occurred - proceed to upstream independently
+      ENVOY_LOG(warn, "global_cache: timeout waiting for in-flight request for key: {} - proceeding to upstream", cache_key_);
+      state_ = FilterState::CacheMiss;
+      return Http::FilterHeadersStatus::Continue;
+    }
 
     // The first request has completed - use its result
     if (in_flight->result) {
