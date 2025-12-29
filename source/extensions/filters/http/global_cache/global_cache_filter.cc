@@ -12,6 +12,7 @@ namespace GlobalCache {
 // Initialize static cache storage
 std::unordered_map<std::string, std::shared_ptr<CacheEntry>> GlobalCacheFilter::cache_;
 std::mutex GlobalCacheFilter::cache_mutex_;
+std::counting_semaphore<2> GlobalCacheFilter::cache_semaphore_{2};
 
 GlobalCacheFilterConfig::GlobalCacheFilterConfig(
     const envoy::extensions::filters::http::global_cache::v3::GlobalCache&) {
@@ -44,9 +45,10 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
 
   ENVOY_LOG(debug, "global_cache: checking cache for key: {}", cache_key_);
 
-  // Check if we have a cached entry (with mutex protection)
+  // Check if we have a cached entry (with semaphore and mutex protection)
   std::shared_ptr<CacheEntry> cached_entry;
   {
+    SemaphoreGuard sem_guard(cache_semaphore_);
     std::lock_guard<std::mutex> lock(cache_mutex_);
     auto it = cache_.find(cache_key_);
     if (it != cache_.end()) {
@@ -132,6 +134,7 @@ Http::FilterHeadersStatus GlobalCacheFilter::encodeHeaders(Http::ResponseHeaderM
     auto expiration = std::chrono::steady_clock::now() + CACHE_TTL;
     Buffer::OwnedImpl empty_body;
 
+    SemaphoreGuard sem_guard(cache_semaphore_);
     std::lock_guard<std::mutex> lock(cache_mutex_);
     cache_[cache_key_] = std::make_shared<CacheEntry>(
         std::move(empty_body), std::move(response_headers_), expiration);
@@ -161,6 +164,7 @@ Http::FilterDataStatus GlobalCacheFilter::encodeData(Buffer::Instance& data, boo
     // Cache the complete response
     auto expiration = std::chrono::steady_clock::now() + CACHE_TTL;
 
+    SemaphoreGuard sem_guard(cache_semaphore_);
     std::lock_guard<std::mutex> lock(cache_mutex_);
     cache_[cache_key_] = std::make_shared<CacheEntry>(
         std::move(buffered_body_), std::move(response_headers_), expiration);

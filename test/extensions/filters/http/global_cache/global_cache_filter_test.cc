@@ -14,106 +14,156 @@ namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace GlobalCache {
-namespace {
 
 class GlobalCacheFilterTest : public testing::Test {
 public:
   GlobalCacheFilterTest() {
+    // Clear the global cache before each test
+    GlobalCacheFilter::cache_.clear();
+
     envoy::extensions::filters::http::global_cache::v3::GlobalCache proto_config;
     config_ = std::make_shared<GlobalCacheFilterConfig>(proto_config);
+  }
+
+  void setupFilter() {
     filter_ = std::make_shared<GlobalCacheFilter>(config_);
+    filter_->setDecoderFilterCallbacks(decoder_callbacks_);
     filter_->setEncoderFilterCallbacks(encoder_callbacks_);
   }
 
 protected:
   GlobalCacheFilterConfigSharedPtr config_;
   std::shared_ptr<GlobalCacheFilter> filter_;
+  NiceMock<Http::MockStreamDecoderFilterCallbacks> decoder_callbacks_;
   NiceMock<Http::MockStreamEncoderFilterCallbacks> encoder_callbacks_;
 };
 
-// Test that the filter replaces the response body with "cached"
-TEST_F(GlobalCacheFilterTest, ReplacesResponseBody) {
-  // Setup headers
-  Http::TestResponseHeaderMapImpl headers{{":status", "200"}};
+// Test cache miss - first request goes to upstream
+TEST_F(GlobalCacheFilterTest, CacheMiss) {
+  setupFilter();
 
-  // Call encodeHeaders - should remove Content-Length
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(headers, false));
+  // First request - should be a cache miss
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/data"}, {":authority", "example.com"}};
 
-  // Verify Content-Length was removed
-  EXPECT_FALSE(headers.ContentLength());
+  // decodeHeaders should return Continue (cache miss, forward to upstream)
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
 
-  // Setup data with original body
-  Buffer::OwnedImpl data("original response body");
+  // Simulate upstream response
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, false));
 
-  // Call encodeData with end_stream = true
-  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(data, true));
+  // Response body
+  Buffer::OwnedImpl response_body("test response");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body, true));
 
-  // Verify the body was replaced with "cached"
-  EXPECT_EQ("cached", data.toString());
+  // Verify response was cached
+  EXPECT_EQ(1, GlobalCacheFilter::cache_.size());
 }
 
-// Test with multiple data chunks
-TEST_F(GlobalCacheFilterTest, HandlesMultipleDataChunks) {
-  Http::TestResponseHeaderMapImpl headers{{":status", "200"}};
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(headers, false));
+// Test cache hit - second request served from cache
+TEST_F(GlobalCacheFilterTest, CacheHit) {
+  // First request - populate cache
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/data"}, {":authority", "example.com"}};
 
-  // First chunk - should be drained
-  Buffer::OwnedImpl data1("chunk1");
-  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(data1, false));
-  EXPECT_EQ(0, data1.length());
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
 
-  // Second chunk - should be drained
-  Buffer::OwnedImpl data2("chunk2");
-  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(data2, false));
-  EXPECT_EQ(0, data2.length());
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, false));
 
-  // Final chunk - should add "cached"
-  Buffer::OwnedImpl data3("chunk3");
-  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(data3, true));
-  EXPECT_EQ("cached", data3.toString());
+  Buffer::OwnedImpl response_body("cached data");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body, true));
+
+  // Second request with same key - should hit cache
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers2{
+      {":method", "GET"}, {":path", "/api/data"}, {":authority", "example.com"}};
+
+  // decodeHeaders should return StopAllIterationAndWatermark (cache hit)
+  // The filter will call decoder_callbacks_.encodeHeaders() and encodeData() internally
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers2, true));
 }
 
-// Test with no body (end_stream = true in headers)
-TEST_F(GlobalCacheFilterTest, HandlesNoBody) {
-  Http::TestResponseHeaderMapImpl headers{{":status", "204"}};
+// Test different cache keys
+TEST_F(GlobalCacheFilterTest, DifferentCacheKeys) {
+  // First request
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers1{
+      {":method", "GET"}, {":path", "/api/data1"}, {":authority", "example.com"}};
 
-  // When end_stream is true in headers, should just continue
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(headers, true));
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers1, true));
 
-  // Content-Length should still be present if it was there
-  headers.setContentLength(0);
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(headers, true));
+  Http::TestResponseHeaderMapImpl response_headers1{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers1, false));
+
+  Buffer::OwnedImpl response_body1("data1");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body1, true));
+
+  // Second request with different path
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers2{
+      {":method", "GET"}, {":path", "/api/data2"}, {":authority", "example.com"}};
+
+  // Should be cache miss (different key)
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers2, true));
+
+  // Should have 1 entry in cache (first request)
+  EXPECT_EQ(1, GlobalCacheFilter::cache_.size());
 }
 
-// Test empty response body
-TEST_F(GlobalCacheFilterTest, HandlesEmptyBody) {
-  Http::TestResponseHeaderMapImpl headers{{":status", "200"}};
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(headers, false));
+// Test empty body response
+TEST_F(GlobalCacheFilterTest, EmptyBodyResponse) {
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/empty"}, {":authority", "example.com"}};
 
-  // Empty data with end_stream
-  Buffer::OwnedImpl data("");
-  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(data, true));
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
 
-  // Should still add "cached"
-  EXPECT_EQ("cached", data.toString());
+  // Response with no body (end_stream = true in headers)
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "204"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
+
+  // Should be cached even with no body
+  EXPECT_EQ(1, GlobalCacheFilter::cache_.size());
+
+  // Second request should hit cache
+  setupFilter();
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers, true));
 }
 
-// Test large response body
-TEST_F(GlobalCacheFilterTest, HandlesLargeBody) {
-  Http::TestResponseHeaderMapImpl headers{{":status", "200"}};
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(headers, false));
+// Test cache with multiple data chunks
+TEST_F(GlobalCacheFilterTest, MultipleDataChunks) {
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/chunked"}, {":authority", "example.com"}};
 
-  // Large data
-  std::string large_body(10000, 'x');
-  Buffer::OwnedImpl data(large_body);
-  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(data, true));
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
 
-  // Should be replaced with "cached"
-  EXPECT_EQ("cached", data.toString());
-  EXPECT_EQ(6, data.length()); // "cached" is 6 bytes
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, false));
+
+  // Multiple data chunks
+  Buffer::OwnedImpl chunk1("chunk1");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(chunk1, false));
+
+  Buffer::OwnedImpl chunk2("chunk2");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(chunk2, false));
+
+  Buffer::OwnedImpl chunk3("chunk3");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(chunk3, true));
+
+  // Should be cached
+  EXPECT_EQ(1, GlobalCacheFilter::cache_.size());
+
+  // Verify cached body contains all chunks
+  auto cached_entry = GlobalCacheFilter::cache_.begin()->second;
+  EXPECT_EQ("chunk1chunk2chunk3", cached_entry->body.toString());
 }
 
-} // namespace
 } // namespace GlobalCache
 } // namespace HttpFilters
 } // namespace Extensions
