@@ -212,6 +212,7 @@ EXTENSIONS = {
     "envoy.filters.http.stateful_session":              "//source/extensions/filters/http/stateful_session:config",
     "envoy.filters.http.header_mutation":               "//source/extensions/filters/http/header_mutation:config",
     "envoy.filters.http.transform":                     "//source/extensions/filters/http/transform:config",
+    "envoy.filters.http.global_cache":                  "//source/extensions/filters/http/global_cache:config",
 
     #
     # Listener filters
