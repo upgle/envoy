@@ -1,11 +1,12 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
-#include <semaphore>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "envoy/buffer/buffer.h"
 #include "envoy/extensions/filters/http/global_cache/v3/global_cache.pb.h"
@@ -20,26 +21,6 @@ namespace HttpFilters {
 namespace GlobalCache {
 
 /**
- * RAII wrapper for semaphore to ensure proper acquire/release.
- */
-class SemaphoreGuard {
-public:
-  explicit SemaphoreGuard(std::counting_semaphore<2>& sem) : sem_(sem) {
-    sem_.acquire();
-  }
-  ~SemaphoreGuard() {
-    sem_.release();
-  }
-
-  // Prevent copying
-  SemaphoreGuard(const SemaphoreGuard&) = delete;
-  SemaphoreGuard& operator=(const SemaphoreGuard&) = delete;
-
-private:
-  std::counting_semaphore<2>& sem_;
-};
-
-/**
  * Cache entry that stores response data and expiration time.
  */
 struct CacheEntry {
@@ -50,6 +31,16 @@ struct CacheEntry {
   CacheEntry(Buffer::OwnedImpl body_data, Http::ResponseHeaderMapPtr header_map,
              std::chrono::steady_clock::time_point exp_time)
       : body(std::move(body_data)), headers(std::move(header_map)), expiration_time(exp_time) {}
+};
+
+/**
+ * Tracks an in-flight request to prevent duplicate upstream requests for the same cache key.
+ * Uses single-flight pattern: first request goes upstream, subsequent requests wait.
+ */
+struct InFlightRequest {
+  std::condition_variable cv;
+  bool completed{false};
+  std::shared_ptr<CacheEntry> result{nullptr};
 };
 
 /**
@@ -87,14 +78,18 @@ public:
   // Global cache storage (5 minute TTL) - public for testing
   static std::unordered_map<std::string, std::shared_ptr<CacheEntry>> cache_;
   static std::mutex cache_mutex_;
-  static std::counting_semaphore<2> cache_semaphore_; // Limit to 2 concurrent cache operations
   static constexpr std::chrono::minutes CACHE_TTL{5};
+
+  // Single-flight pattern: track in-flight requests to prevent thundering herd
+  static std::unordered_map<std::string, std::shared_ptr<InFlightRequest>> in_flight_requests_;
+  static std::mutex in_flight_mutex_;
 
 private:
   enum class FilterState {
     Initial,           // Initial state, checking cache
     CacheHit,          // Cache hit, serving from cache
     CacheMiss,         // Cache miss, forwarding to upstream
+    WaitingForUpstream,// Waiting for another request to complete
     Caching            // Caching upstream response
   };
 
