@@ -17,12 +17,23 @@
 #include "source/extensions/filters/http/common/pass_through_filter.h"
 #include "source/extensions/filters/http/global_cache/cache_backend.h"
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace GlobalCache {
+
+struct CacheKeyConfig {
+  bool include_scheme{false};
+  bool include_host{true};
+  bool include_path{true};
+  bool include_query_params{true};
+  absl::flat_hash_set<std::string> query_params_included;
+  absl::flat_hash_set<std::string> query_params_excluded;
+  std::vector<Http::LowerCaseString> headers_included;
+};
 
 /**
  * Tracks an in-flight request to prevent duplicate upstream requests for the same cache key.
@@ -46,11 +57,13 @@ public:
   std::chrono::milliseconds singleFlightTimeout() const { return single_flight_timeout_; }
   std::chrono::seconds defaultTtl() const { return default_ttl_; }
   CacheBackendSharedPtr cacheBackend() const { return cache_backend_; }
+  const CacheKeyConfig& cacheKeyConfig() const { return cache_key_config_; }
 
 private:
   std::chrono::milliseconds single_flight_timeout_;
   std::chrono::seconds default_ttl_;
   CacheBackendSharedPtr cache_backend_;
+  CacheKeyConfig cache_key_config_;
 };
 
 using GlobalCacheFilterConfigSharedPtr = std::shared_ptr<GlobalCacheFilterConfig>;
@@ -63,11 +76,13 @@ public:
   bool disabled() const { return disabled_; }
   absl::optional<std::chrono::seconds> defaultTtlOverride() const { return default_ttl_override_; }
   absl::optional<bool> includeQueryParamsOverride() const { return include_query_params_override_; }
+  const absl::optional<CacheKeyConfig>& cacheKeyOverride() const { return cache_key_override_; }
 
 private:
   const bool disabled_;
   const absl::optional<std::chrono::seconds> default_ttl_override_;
   const absl::optional<bool> include_query_params_override_;
+  const absl::optional<CacheKeyConfig> cache_key_override_;
 };
 
 /**
@@ -115,6 +130,9 @@ private:
   static void notifyInFlightWaiters(const std::string& key,
                                     const std::shared_ptr<CacheEntry>& entry);
 
+  std::string buildPathForCacheKey(const Http::RequestHeaderMap& headers) const;
+  std::string buildHeaderKeyFragment(const Http::RequestHeaderMap& headers) const;
+
   GlobalCacheFilterConfigSharedPtr config_;
   CacheBackendSharedPtr cache_backend_;
 
@@ -127,7 +145,7 @@ private:
   bool owns_in_flight_{false};
   std::string in_flight_key_;
   std::chrono::seconds effective_default_ttl_;
-  bool include_query_params_{true};
+  CacheKeyConfig effective_cache_key_config_;
   bool cache_enabled_{true};
 };
 

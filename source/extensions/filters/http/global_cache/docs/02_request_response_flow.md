@@ -5,12 +5,15 @@
 요청이 들어오면 필터는 아래 순서로 동작합니다.
 
 1. **라우트별 override 확인**
-   - `disabled`, `default_ttl`, `include_query_params` 적용
+   - `disabled`, `default_ttl`, `cache_key` 적용
+   - `cache_key`가 없으면 필터 전역 `cache_key`를 사용
+   - legacy인 `include_query_params`는 `cache_key.include_query_params`를 보완
    - `disabled`면 캐시 로직을 건너뜀
 
 2. **캐시 키 생성**
-   - `METHOD:HOST:PATH` 형식
-   - `include_query_params`가 false면 쿼리 스트링을 제거
+   - 기본은 `METHOD:HOST:PATH` (+ query)
+   - `cache_key`로 스킴/호스트/경로/쿼리/헤더 포함 여부를 구성 가능
+   - 쿼리 파라미터 allow/deny 목록, 헤더 포함 목록 지원
    - 구현 위치: `GlobalCacheFilter::generateCacheKey`
 
 3. **캐시 조회**

@@ -8,10 +8,10 @@
 
 ## 10.2 캐시 키 단순화
 
-- `METHOD:HOST:PATH`만 사용
-- 쿼리 스트링은 path에 포함되므로 반영됨
-- 라우트별로 `include_query_params: false` 설정 시 제외 가능
-- 헤더 기반 Vary 처리는 없음
+- 기본은 `METHOD:HOST:PATH` (+ query) 이지만,
+  `cache_key` 설정으로 스킴/호스트/경로/쿼리/헤더 포함을 조정할 수 있음
+- 쿼리 파라미터 allow/deny, 헤더 allowlist는 지원하지만
+  응답의 `Vary` 헤더를 해석하는 자동 구성은 아직 없음
 
 ## 10.3 단일 전역 in-flight map
 

@@ -44,6 +44,42 @@ message GlobalCache {
   // Cache backend configuration.
   // If not specified, uses in-memory local cache with default settings.
   CacheBackendConfig cache_backend = 3;
+
+  // Cache key configuration.
+  // When unset, defaults to method + host + path (including query parameters).
+  CacheKeyConfig cache_key = 4;
+}
+
+// Cache key configuration for the global cache filter.
+message CacheKeyConfig {
+  // Whether to include the URL scheme in the cache key.
+  // Default: false
+  google.protobuf.BoolValue include_scheme = 1;
+
+  // Whether to include the host/authority in the cache key.
+  // Default: true
+  google.protobuf.BoolValue include_host = 2;
+
+  // Whether to include the URL path in the cache key.
+  // Default: true
+  google.protobuf.BoolValue include_path = 3;
+
+  // Whether to include query parameters in the cache key.
+  // Default: true
+  google.protobuf.BoolValue include_query_params = 4;
+
+  // If non-empty, only query parameters with these names are included in the cache key.
+  repeated string query_params_included = 5
+      [(validate.rules).repeated = {items {string {min_len: 1 max_len: 1024}}}];
+
+  // If non-empty, query parameters with these names are excluded from the cache key.
+  repeated string query_params_excluded = 6
+      [(validate.rules).repeated = {items {string {min_len: 1 max_len: 1024}}}];
+
+  // Request headers to include in the cache key.
+  repeated string headers_included = 7 [(validate.rules).repeated = {
+    items {string {min_len: 1 well_known_regex: HTTP_HEADER_NAME strict: false}}
+  }];
 }
 
 // Per-route configuration for the global cache filter.
@@ -68,6 +104,10 @@ message GlobalCachePerRoute {
     // Whether to include URL query parameters in the cache key.
     // When unset, defaults to the filter-level behavior (currently includes query parameters).
     google.protobuf.BoolValue include_query_params = 2;
+
+    // Per-route cache key configuration. If set, this fully replaces the filter-level cache key
+    // configuration for this route.
+    CacheKeyConfig cache_key = 3;
   }
 }
 

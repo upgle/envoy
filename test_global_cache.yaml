@@ -26,6 +26,10 @@ static_resources:
           - name: envoy.filters.http.global_cache
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCache
+              cache_key:
+                include_query_params: { value: true }
+                query_params_included: ["user"]
+                headers_included: ["x-user"]
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

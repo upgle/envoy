@@ -7,6 +7,7 @@ single-flight 패턴을 제공합니다.
 ## 주요 기능
 
 - 요청 메서드/호스트/경로 기반의 캐시 키 생성 (`<METHOD>:<HOST>:<PATH>`), 기본으로 쿼리 스트링 포함
+- 설정으로 캐시 키 구성 요소(스킴/호스트/경로/쿼리/헤더)를 선택적으로 포함 가능
 - 캐시된 응답 헤더/바디를 그대로 복원해 응답 제공
 - `x-cache` 헤더로 캐시 상태 노출 (`HIT`, `HIT-COALESCED`, `MISS`)
 - single-flight 패턴으로 동일 키의 동시 요청을 합류(coalesce)
@@ -45,6 +46,9 @@ single-flight 패턴을 제공합니다.
 - `cache_backend`
   - 설명: 캐시 백엔드 선택 (local/redis/tiered)
   - 미설정 시 로컬 LRU 캐시 기본 설정 사용
+- `cache_key`
+  - 설명: 캐시 키 구성(스킴/호스트/경로/쿼리/헤더)
+  - 기본값: method + host + path (+ query)
 
 ### CacheBackendConfig.local (LocalCacheConfig)
 
@@ -170,4 +174,27 @@ route_config:
           overrides:
             default_ttl: { seconds: 30 }
             include_query_params: { value: false }
+
+### 캐시 키 커스터마이즈
+
+```yaml
+- name: envoy.filters.http.global_cache
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCache
+    cache_key:
+      include_scheme: { value: true }
+      include_query_params: { value: true }
+      query_params_included: ["user_id"]
+      headers_included: ["x-user-tier", "x-region"]
+```
+
+```yaml
+typed_per_filter_config:
+  envoy.filters.http.global_cache:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
+    overrides:
+      cache_key:
+        include_query_params: { value: false }
+        headers_included: ["x-device"]
+```
 ```

@@ -26,6 +26,11 @@ public:
     config_ = std::make_shared<GlobalCacheFilterConfig>(proto_config, cache_backend_);
   }
 
+  void setFilterConfig(
+      const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config) {
+    config_ = std::make_shared<GlobalCacheFilterConfig>(proto_config, cache_backend_);
+  }
+
   void setPerRouteConfig(
       const envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute& proto_config) {
     per_route_config_ = std::make_shared<GlobalCachePerRouteConfig>(proto_config);
@@ -254,6 +259,66 @@ TEST_F(GlobalCacheFilterTest, PerRouteDefaultTtlOverride) {
   const auto ttl = cached_entry->expiration_time - start;
   EXPECT_GE(ttl, std::chrono::milliseconds(500));
   EXPECT_LE(ttl, std::chrono::seconds(2));
+}
+
+TEST_F(GlobalCacheFilterTest, CacheKeyIncludesHeaders) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCache proto_config;
+  proto_config.mutable_cache_key()->add_headers_included("x-user");
+  setFilterConfig(proto_config);
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers1{
+      {":method", "GET"},
+      {":path", "/api/data"},
+      {":authority", "example.com"},
+      {"x-user", "u1"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers1, true));
+  Http::TestResponseHeaderMapImpl response_headers1{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers1, false));
+  Buffer::OwnedImpl response_body1("data1");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body1, true));
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers2{
+      {":method", "GET"},
+      {":path", "/api/data"},
+      {":authority", "example.com"},
+      {"x-user", "u2"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers2, true));
+  Http::TestResponseHeaderMapImpl response_headers2{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers2, false));
+  Buffer::OwnedImpl response_body2("data2");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body2, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(2, local_cache->size());
+}
+
+TEST_F(GlobalCacheFilterTest, CacheKeyQueryParamAllowlist) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCache proto_config;
+  auto* cache_key = proto_config.mutable_cache_key();
+  cache_key->mutable_include_query_params()->set_value(true);
+  cache_key->add_query_params_included("user");
+  setFilterConfig(proto_config);
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers1{
+      {":method", "GET"},
+      {":path", "/api/data?user=1&role=admin"},
+      {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers1, true));
+  Http::TestResponseHeaderMapImpl response_headers1{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers1, false));
+  Buffer::OwnedImpl response_body1("data");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body1, true));
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers2{
+      {":method", "GET"},
+      {":path", "/api/data?user=1&role=guest"},
+      {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers2, true));
 }
 
 } // namespace GlobalCache

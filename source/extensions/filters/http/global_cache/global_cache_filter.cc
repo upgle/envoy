@@ -11,6 +11,49 @@ namespace Extensions {
 namespace HttpFilters {
 namespace GlobalCache {
 
+namespace {
+
+CacheKeyConfig defaultCacheKeyConfig() {
+  CacheKeyConfig config;
+  config.include_scheme = false;
+  config.include_host = true;
+  config.include_path = true;
+  config.include_query_params = true;
+  return config;
+}
+
+CacheKeyConfig makeCacheKeyConfig(
+    const envoy::extensions::filters::http::global_cache::v3::CacheKeyConfig& proto_config) {
+  CacheKeyConfig config = defaultCacheKeyConfig();
+
+  if (proto_config.has_include_scheme()) {
+    config.include_scheme = proto_config.include_scheme().value();
+  }
+  if (proto_config.has_include_host()) {
+    config.include_host = proto_config.include_host().value();
+  }
+  if (proto_config.has_include_path()) {
+    config.include_path = proto_config.include_path().value();
+  }
+  if (proto_config.has_include_query_params()) {
+    config.include_query_params = proto_config.include_query_params().value();
+  }
+
+  for (const auto& name : proto_config.query_params_included()) {
+    config.query_params_included.insert(name);
+  }
+  for (const auto& name : proto_config.query_params_excluded()) {
+    config.query_params_excluded.insert(name);
+  }
+  for (const auto& header_name : proto_config.headers_included()) {
+    config.headers_included.emplace_back(header_name);
+  }
+
+  return config;
+}
+
+} // namespace
+
 // Initialize in-flight request tracking for single-flight pattern
 std::unordered_map<std::string, std::shared_ptr<InFlightRequest>>
     GlobalCacheFilter::in_flight_requests_;
@@ -34,6 +77,11 @@ GlobalCacheFilterConfig::GlobalCacheFilterConfig(
   } else {
     default_ttl_ = std::chrono::seconds(300); // 5 minutes default
   }
+
+  cache_key_config_ = defaultCacheKeyConfig();
+  if (proto_config.has_cache_key()) {
+    cache_key_config_ = makeCacheKeyConfig(proto_config.cache_key());
+  }
 }
 
 GlobalCachePerRouteConfig::GlobalCachePerRouteConfig(
@@ -55,6 +103,12 @@ GlobalCachePerRouteConfig::GlobalCachePerRouteConfig(
                   envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute::kOverrides &&
               config.overrides().has_include_query_params()
               ? absl::optional<bool>(config.overrides().include_query_params().value())
+              : absl::nullopt),
+      cache_key_override_(
+          config.override_case() ==
+                  envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute::kOverrides &&
+              config.overrides().has_cache_key()
+              ? absl::optional<CacheKeyConfig>(makeCacheKeyConfig(config.overrides().cache_key()))
               : absl::nullopt) {}
 
 GlobalCacheFilter::GlobalCacheFilter(GlobalCacheFilterConfigSharedPtr config)
@@ -62,24 +116,91 @@ GlobalCacheFilter::GlobalCacheFilter(GlobalCacheFilterConfigSharedPtr config)
       effective_default_ttl_(config_->defaultTtl()) {}
 
 std::string GlobalCacheFilter::generateCacheKey(const Http::RequestHeaderMap& headers) {
-  // Use method + host + path as cache key
   std::string key;
   if (headers.Method()) {
     key += std::string(headers.Method()->value().getStringView());
   }
-  key += ":";
-  if (headers.Host()) {
-    key += std::string(headers.Host()->value().getStringView());
-  }
-  key += ":";
-  if (headers.Path()) {
-    if (include_query_params_) {
-      key += std::string(headers.Path()->value().getStringView());
-    } else {
-      key += Http::Utility::stripQueryString(headers.Path()->value());
+  if (effective_cache_key_config_.include_scheme) {
+    key += ":";
+    if (headers.Scheme()) {
+      key += std::string(headers.Scheme()->value().getStringView());
     }
   }
+  if (effective_cache_key_config_.include_host) {
+    key += ":";
+    if (headers.Host()) {
+      key += std::string(headers.Host()->value().getStringView());
+    }
+  }
+  if (effective_cache_key_config_.include_path) {
+    key += ":";
+    key += buildPathForCacheKey(headers);
+  }
+  if (!effective_cache_key_config_.headers_included.empty()) {
+    key += buildHeaderKeyFragment(headers);
+  }
   return key;
+}
+
+std::string GlobalCacheFilter::buildPathForCacheKey(const Http::RequestHeaderMap& headers) const {
+  if (!headers.Path()) {
+    return "";
+  }
+
+  const auto& path = headers.Path()->value();
+  if (!effective_cache_key_config_.include_query_params) {
+    return Http::Utility::stripQueryString(path);
+  }
+
+  if (effective_cache_key_config_.query_params_included.empty() &&
+      effective_cache_key_config_.query_params_excluded.empty()) {
+    return std::string(path.getStringView());
+  }
+
+  const auto query_params = Http::Utility::QueryParamsMulti::parseQueryString(path.getStringView());
+  Http::Utility::QueryParamsMulti filtered_params;
+  const bool include_by_default = effective_cache_key_config_.query_params_included.empty();
+
+  for (const auto& entry : query_params.data()) {
+    const auto& name = entry.first;
+    const auto& values = entry.second;
+    for (const auto& value : values) {
+      bool include = include_by_default ||
+                     effective_cache_key_config_.query_params_included.contains(name);
+      if (include &&
+          effective_cache_key_config_.query_params_excluded.contains(name)) {
+        include = false;
+      }
+      if (include) {
+        filtered_params.add(name, value);
+      }
+    }
+  }
+
+  return filtered_params.replaceQueryString(path);
+}
+
+std::string GlobalCacheFilter::buildHeaderKeyFragment(const Http::RequestHeaderMap& headers) const {
+  std::string fragment;
+
+  for (const auto& header_name : effective_cache_key_config_.headers_included) {
+    fragment += ":h:";
+    fragment += header_name.get();
+    fragment += "=";
+
+    const auto values = headers.get(header_name);
+    bool first = true;
+    for (size_t i = 0; i < values.size(); ++i) {
+      const auto* entry = values[i];
+      if (!first) {
+        fragment += ",";
+      }
+      fragment += std::string(entry->value().getStringView());
+      first = false;
+    }
+  }
+
+  return fragment;
 }
 
 void GlobalCacheFilter::serveCachedResponse(const std::shared_ptr<CacheEntry>& cached_entry,
@@ -123,10 +244,18 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
     if (auto ttl_override = per_route_config->defaultTtlOverride(); ttl_override.has_value()) {
       effective_default_ttl_ = ttl_override.value();
     }
-    if (auto include_override = per_route_config->includeQueryParamsOverride();
-        include_override.has_value()) {
-      include_query_params_ = include_override.value();
+    if (auto cache_key_override = per_route_config->cacheKeyOverride();
+        cache_key_override.has_value()) {
+      effective_cache_key_config_ = cache_key_override.value();
+    } else {
+      effective_cache_key_config_ = config_->cacheKeyConfig();
+      if (auto include_override = per_route_config->includeQueryParamsOverride();
+          include_override.has_value()) {
+        effective_cache_key_config_.include_query_params = include_override.value();
+      }
     }
+  } else {
+    effective_cache_key_config_ = config_->cacheKeyConfig();
   }
 
   if (!cache_enabled_) {
