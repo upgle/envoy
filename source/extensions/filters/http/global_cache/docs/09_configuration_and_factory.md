@@ -1,0 +1,22 @@
+# 09. 설정과 초기화 경로
+
+## 9.1 필터 생성
+
+`GlobalCacheFilterFactory`가 설정을 받아
+적절한 backend를 생성합니다.
+
+- `cache_backend` 미지정 → 기본 LocalCache
+- `local` → LocalCache
+- `redis` → RedisCache
+- `tiered` → TieredCache
+
+## 9.2 config 파라미터
+
+- `single_flight_timeout`: 대기 최대 시간
+- `default_ttl`: 응답 저장 기본 TTL
+- 로컬 캐시: `max_entries`, `max_bytes`
+- Redis: `cluster_name`, `op_timeout`, `key_prefix`, `enable_cluster_mode`
+- Tiered: `write_strategy`, `populate_l1_on_l2_hit`
+
+프로토는 `api/envoy/extensions/filters/http/global_cache/v3/global_cache.proto`에 정의되어 있습니다.
+
