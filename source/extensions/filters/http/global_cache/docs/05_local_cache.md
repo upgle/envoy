@@ -26,9 +26,9 @@
 
 `CacheEntry`에는 `expiration_time`이 들어 있습니다.
 `lookup` 시점에 만료 여부를 확인하고, 만료된 항목은 즉시 제거합니다.
+`expiration_time`은 전역 `default_ttl` 또는 라우트별 override TTL로 계산됩니다.
 
 ## 5.4 동기 호출
 
 LocalCache는 lookup/insert 시 **콜백을 바로 호출**합니다.
 따라서 `decodeHeaders()`에서 callback이 **즉시 실행**됩니다.
-

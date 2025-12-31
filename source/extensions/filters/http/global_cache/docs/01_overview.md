@@ -12,6 +12,7 @@ Envoy는 Go의 goroutine 기반 서버와 다르게 **이벤트 루프 기반**�
 핵심 클래스/파일은 다음입니다.
 
 - 필터 본체: `source/extensions/filters/http/global_cache/global_cache_filter.cc`
+- 라우트별 설정: `source/extensions/filters/http/global_cache/global_cache_filter.h`
 - 캐시 공통 인터페이스: `source/extensions/filters/http/global_cache/cache_backend.h`
 - 로컬 LRU: `source/extensions/filters/http/global_cache/local_cache.cc`
 - Redis: `source/extensions/filters/http/global_cache/redis_cache.cc`
@@ -19,3 +20,8 @@ Envoy는 Go의 goroutine 기반 서버와 다르게 **이벤트 루프 기반**�
 - 직렬화: `source/extensions/filters/http/global_cache/cache_serialization.cc`
 - 필터 팩토리/설정: `source/extensions/filters/http/global_cache/config.cc`
 
+추가로, 라우트별로 아래를 override 할 수 있습니다.
+
+- 캐시 활성화/비활성화
+- `default_ttl` (캐시 저장 TTL)
+- 캐시 키에 쿼리 스트링 포함 여부

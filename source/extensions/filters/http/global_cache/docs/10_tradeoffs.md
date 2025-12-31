@@ -4,11 +4,13 @@
 
 - 현재 구현은 **응답 헤더(Cache-Control/Expires)**를 해석하지 않습니다.
 - 무조건 `default_ttl`만 적용합니다.
+- 라우트별로는 `overrides.default_ttl`로 조정 가능합니다.
 
 ## 10.2 캐시 키 단순화
 
 - `METHOD:HOST:PATH`만 사용
 - 쿼리 스트링은 path에 포함되므로 반영됨
+- 라우트별로 `include_query_params: false` 설정 시 제외 가능
 - 헤더 기반 Vary 처리는 없음
 
 ## 10.3 단일 전역 in-flight map
@@ -26,4 +28,3 @@
 
 - callback은 dispatcher에 post되어 실행됨
 - 즉, Redis 응답 thread와 필터 thread가 분리될 수 있음
-

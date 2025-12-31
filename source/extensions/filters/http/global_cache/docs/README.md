@@ -3,6 +3,7 @@
 이 문서는 `envoy.filters.http.global_cache`의 **현재 구현을 책처럼 한 단계씩** 설명합니다.
 C/C++에 익숙하지 않은 Go 개발자를 대상으로, Envoy의 이벤트 기반 구조와
 C++ 코드에서 자주 보이는 문법/패턴을 함께 풀어 설명합니다.
+또한 라우트별 캐시 override(비활성화/TTL/쿼리 포함 여부)도 포함합니다.
 
 ## 목차
 
@@ -17,4 +18,3 @@ C++ 코드에서 자주 보이는 문법/패턴을 함께 풀어 설명합니다
 - 09. 설정과 초기화 경로: `source/extensions/filters/http/global_cache/docs/09_configuration_and_factory.md`
 - 10. 트레이드오프와 주의점: `source/extensions/filters/http/global_cache/docs/10_tradeoffs.md`
 - 부록. C++/Go 매핑 치트시트: `source/extensions/filters/http/global_cache/docs/appendix_cpp_go_cheatsheet.md`
-

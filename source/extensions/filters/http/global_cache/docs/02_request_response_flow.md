@@ -4,19 +4,24 @@
 
 요청이 들어오면 필터는 아래 순서로 동작합니다.
 
-1. **캐시 키 생성**
+1. **라우트별 override 확인**
+   - `disabled`, `default_ttl`, `include_query_params` 적용
+   - `disabled`면 캐시 로직을 건너뜀
+
+2. **캐시 키 생성**
    - `METHOD:HOST:PATH` 형식
+   - `include_query_params`가 false면 쿼리 스트링을 제거
    - 구현 위치: `GlobalCacheFilter::generateCacheKey`
 
-2. **캐시 조회**
+3. **캐시 조회**
    - `cache_backend_->lookup(key, callback)` 호출
    - 로컬 캐시는 즉시 callback, Redis는 이벤트 루프에서 나중에 callback
 
-3. **캐시 결과 처리**
+4. **캐시 결과 처리**
    - `HIT`: `serveCachedResponse()`로 즉시 응답
    - `MISS`: single-flight map 확인
 
-4. **single-flight 처리**
+5. **single-flight 처리**
    - 이미 동일 키의 요청이 진행 중이면 대기자로 등록
    - 그렇지 않으면 “첫 번째 요청”으로 upstream 진행
 
@@ -60,4 +65,3 @@ C++ 특유 포인트:
 
 - 헤더는 `HeaderMap`을 직접 순회해서 새 맵으로 복사
 - body는 `Buffer::OwnedImpl`에서 `add()`로 복사
-

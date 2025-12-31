@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-# Cleanup function
 cleanup() {
     echo "Cleaning up..."
     if [[ -n "${ENVOY_PID:-}" ]]; then
@@ -12,6 +11,35 @@ cleanup() {
     rm -f envoy.log backend.log backend.pid envoy.pid
 }
 trap cleanup EXIT
+
+json_field() {
+    python3 -c 'import json,sys; payload=json.load(sys.stdin); print(payload.get("request_number",""))'
+}
+
+fetch_response() {
+    local url=$1
+    local attempt=0
+    local header_file=""
+    local body_file=""
+    header_file=$(mktemp)
+    body_file=$(mktemp)
+    while [[ $attempt -lt 10 ]]; do
+        if curl -sf -D "$header_file" -o "$body_file" "$url"; then
+            local request_number=""
+            local x_cache=""
+            request_number=$(json_field < "$body_file")
+            x_cache=$(awk 'BEGIN{IGNORECASE=1} /^x-cache:/ {gsub(/\r/,""); print $2}' "$header_file" | tail -n 1)
+            rm -f "$header_file" "$body_file"
+            echo "$request_number $x_cache"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    rm -f "$header_file" "$body_file"
+    echo " "
+    return 1
+}
 
 echo "Starting Backend Server..."
 python3 test_redis_backend.py > backend.log 2>&1 &
@@ -53,8 +81,7 @@ else
     echo "docker not available; skipping key cleanup."
 fi
 
-CONFIG_FILE=${CONFIG_FILE:-test_redis_integration.yaml}
-"$ENVOY_BIN" -c "$CONFIG_FILE" --log-level info > envoy.log 2>&1 &
+"$ENVOY_BIN" -c test_redis_integration_per_route.yaml --log-level info > envoy.log 2>&1 &
 ENVOY_PID=$!
 echo "Envoy started with PID $ENVOY_PID"
 
@@ -62,49 +89,37 @@ echo "Waiting for Envoy to initialize..."
 sleep 5
 
 echo "----------------------------------------------------------------"
-echo "Sending Request #1 (Expect Cache MISS / Backend HIT)"
+echo "Per-route disabled: /nocache should bypass cache"
 echo "----------------------------------------------------------------"
-curl -v http://localhost:10000/test
-echo ""
+read -r nocache_1 nocache_1_cache <<<"$(fetch_response http://localhost:10000/nocache)"
+read -r nocache_2 nocache_2_cache <<<"$(fetch_response http://localhost:10000/nocache)"
+echo "nocache request numbers: $nocache_1 -> $nocache_2"
+echo "nocache x-cache: ${nocache_1_cache:-<none>} -> ${nocache_2_cache:-<none>}"
 
 echo "----------------------------------------------------------------"
-echo "Sending Request #2 (Expect Cache HIT / Backend MISS)"
+echo "Query params excluded: /query?user=1 then /query?user=2 should reuse cache"
 echo "----------------------------------------------------------------"
-curl -v http://localhost:10000/test
-echo ""
+read -r query_1 query_1_cache <<<"$(fetch_response "http://localhost:10000/query?user=1")"
+read -r query_2 query_2_cache <<<"$(fetch_response "http://localhost:10000/query?user=2")"
+echo "query request numbers: $query_1 -> $query_2"
+echo "query x-cache: $query_1_cache -> $query_2_cache"
 
 echo "----------------------------------------------------------------"
-echo "Checking Backend Log for Hit Count"
+echo "TTL override: /ttl should expire after 1s"
+echo "----------------------------------------------------------------"
+read -r ttl_1 ttl_1_cache <<<"$(fetch_response http://localhost:10000/ttl)"
+sleep 2
+read -r ttl_2 ttl_2_cache <<<"$(fetch_response http://localhost:10000/ttl)"
+echo "ttl request numbers: $ttl_1 -> $ttl_2"
+echo "ttl x-cache: $ttl_1_cache -> $ttl_2_cache"
+
+echo "----------------------------------------------------------------"
+echo "Backend log tail"
 echo "----------------------------------------------------------------"
 if [[ -s backend.log ]]; then
-    cat backend.log
+    tail -n 20 backend.log
 else
     echo "Backend log is empty."
-fi
-if command -v rg >/dev/null 2>&1; then
-    HIT_COUNT=$(rg -c "Request #" backend.log || true)
-else
-    HIT_COUNT=$(grep -c "Request #" backend.log || true)
-fi
-echo "Backend request count: ${HIT_COUNT}"
-
-echo "----------------------------------------------------------------"
-echo "Checking Envoy Log for Redis Initialization"
-echo "----------------------------------------------------------------"
-grep "RedisCache initialized" envoy.log
-
-echo "----------------------------------------------------------------"
-echo "Checking Redis Keys"
-echo "----------------------------------------------------------------"
-REDIS_CONTAINER=${REDIS_CONTAINER:-redis-standalone}
-if command -v docker >/dev/null 2>&1; then
-    if docker ps --format '{{.Names}}' | grep -q "^${REDIS_CONTAINER}\$"; then
-        docker exec "$REDIS_CONTAINER" redis-cli ${REDIS_CLI_ARGS[*]} --scan --pattern "envoy:test:*" | head -20
-    else
-        echo "Redis container '${REDIS_CONTAINER}' not running; skipping key check."
-    fi
-else
-    echo "docker not available; skipping key check."
 fi
 
 echo "Done."

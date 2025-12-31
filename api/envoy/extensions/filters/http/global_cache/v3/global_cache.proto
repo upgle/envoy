@@ -3,6 +3,7 @@ syntax = "proto3";
 package envoy.extensions.filters.http.global_cache.v3;
 
 import "google/protobuf/duration.proto";
+import "google/protobuf/wrappers.proto";
 
 import "udpa/annotations/status.proto";
 import "validate/validate.proto";
@@ -43,6 +44,31 @@ message GlobalCache {
   // Cache backend configuration.
   // If not specified, uses in-memory local cache with default settings.
   CacheBackendConfig cache_backend = 3;
+}
+
+// Per-route configuration for the global cache filter.
+message GlobalCachePerRoute {
+  oneof override {
+    option (validate.required) = true;
+
+    // Disable or re-enable the global cache filter for this route.
+    bool disabled = 1;
+
+    // Override cache behavior for this route.
+    RouteOverrides overrides = 2 [(validate.rules).message = {required: true}];
+  }
+
+  message RouteOverrides {
+    // Override default TTL for cached entries.
+    google.protobuf.Duration default_ttl = 1 [(validate.rules).duration = {
+      gte {seconds: 1}
+      lte {seconds: 86400}  // Max 24 hours
+    }];
+
+    // Whether to include URL query parameters in the cache key.
+    // When unset, defaults to the filter-level behavior (currently includes query parameters).
+    google.protobuf.BoolValue include_query_params = 2;
+  }
 }
 
 // Configuration for cache backend (local, Redis, or tiered).

@@ -36,8 +36,30 @@ GlobalCacheFilterConfig::GlobalCacheFilterConfig(
   }
 }
 
+GlobalCachePerRouteConfig::GlobalCachePerRouteConfig(
+    const envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute& config)
+    : disabled_(config.override_case() ==
+                   envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute::kDisabled
+               ? config.disabled()
+               : false),
+      default_ttl_override_(
+          config.override_case() ==
+                  envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute::kOverrides &&
+              config.overrides().has_default_ttl()
+              ? absl::optional<std::chrono::seconds>(
+                    std::chrono::seconds(PROTOBUF_GET_MS_REQUIRED(config.overrides(), default_ttl) /
+                                         1000))
+              : absl::nullopt),
+      include_query_params_override_(
+          config.override_case() ==
+                  envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute::kOverrides &&
+              config.overrides().has_include_query_params()
+              ? absl::optional<bool>(config.overrides().include_query_params().value())
+              : absl::nullopt) {}
+
 GlobalCacheFilter::GlobalCacheFilter(GlobalCacheFilterConfigSharedPtr config)
-    : config_(std::move(config)), cache_backend_(config_->cacheBackend()) {}
+    : config_(std::move(config)), cache_backend_(config_->cacheBackend()),
+      effective_default_ttl_(config_->defaultTtl()) {}
 
 std::string GlobalCacheFilter::generateCacheKey(const Http::RequestHeaderMap& headers) {
   // Use method + host + path as cache key
@@ -51,7 +73,11 @@ std::string GlobalCacheFilter::generateCacheKey(const Http::RequestHeaderMap& he
   }
   key += ":";
   if (headers.Path()) {
-    key += std::string(headers.Path()->value().getStringView());
+    if (include_query_params_) {
+      key += std::string(headers.Path()->value().getStringView());
+    } else {
+      key += Http::Utility::stripQueryString(headers.Path()->value());
+    }
   }
   return key;
 }
@@ -90,6 +116,23 @@ void GlobalCacheFilter::serveCachedResponse(const std::shared_ptr<CacheEntry>& c
 }
 
 Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMap& headers, bool) {
+  if (const auto* per_route_config =
+          Http::Utility::resolveMostSpecificPerFilterConfig<GlobalCachePerRouteConfig>(
+              decoder_callbacks_)) {
+    cache_enabled_ = !per_route_config->disabled();
+    if (auto ttl_override = per_route_config->defaultTtlOverride(); ttl_override.has_value()) {
+      effective_default_ttl_ = ttl_override.value();
+    }
+    if (auto include_override = per_route_config->includeQueryParamsOverride();
+        include_override.has_value()) {
+      include_query_params_ = include_override.value();
+    }
+  }
+
+  if (!cache_enabled_) {
+    return Http::FilterHeadersStatus::Continue;
+  }
+
   cache_key_ = generateCacheKey(headers);
 
   ENVOY_LOG(debug, "global_cache: checking cache for key: {}", cache_key_);
@@ -178,6 +221,9 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
 
 Http::FilterDataStatus GlobalCacheFilter::decodeData(Buffer::Instance&, bool) {
   // If we served from cache or waiting for upstream, stop processing any request data
+  if (!cache_enabled_) {
+    return Http::FilterDataStatus::Continue;
+  }
   if (state_ == FilterState::CacheHit || state_ == FilterState::WaitingForUpstream) {
     return Http::FilterDataStatus::StopIterationNoBuffer;
   }
@@ -186,6 +232,10 @@ Http::FilterDataStatus GlobalCacheFilter::decodeData(Buffer::Instance&, bool) {
 
 Http::FilterHeadersStatus GlobalCacheFilter::encodeHeaders(Http::ResponseHeaderMap& headers,
                                                            bool end_stream) {
+  if (!cache_enabled_) {
+    return Http::FilterHeadersStatus::Continue;
+  }
+
   // If we served from cache or waiting, this shouldn't be called
   if (state_ == FilterState::CacheHit || state_ == FilterState::WaitingForUpstream) {
     return Http::FilterHeadersStatus::Continue;
@@ -204,14 +254,14 @@ Http::FilterHeadersStatus GlobalCacheFilter::encodeHeaders(Http::ResponseHeaderM
 
   if (end_stream) {
     // No body - cache just the headers
-    auto expiration = std::chrono::steady_clock::now() + config_->defaultTtl();
+    auto expiration = std::chrono::steady_clock::now() + effective_default_ttl_;
     Buffer::OwnedImpl empty_body;
 
     auto cached_entry = std::make_shared<CacheEntry>(std::move(empty_body),
                                                       std::move(response_headers_), expiration);
 
     // Insert into cache backend
-    cache_backend_->insert(cache_key_, cached_entry, config_->defaultTtl(),
+    cache_backend_->insert(cache_key_, cached_entry, effective_default_ttl_,
                            [cache_key = cache_key_, cached_entry](bool success) {
                              if (success) {
                                ENVOY_LOG_MISC(info,
@@ -234,6 +284,10 @@ Http::FilterHeadersStatus GlobalCacheFilter::encodeHeaders(Http::ResponseHeaderM
 }
 
 Http::FilterDataStatus GlobalCacheFilter::encodeData(Buffer::Instance& data, bool end_stream) {
+  if (!cache_enabled_) {
+    return Http::FilterDataStatus::Continue;
+  }
+
   // If we served from cache or waiting, this shouldn't be called
   if (state_ == FilterState::CacheHit || state_ == FilterState::WaitingForUpstream) {
     return Http::FilterDataStatus::Continue;
@@ -247,14 +301,14 @@ Http::FilterDataStatus GlobalCacheFilter::encodeData(Buffer::Instance& data, boo
 
   if (end_stream && response_headers_) {
     // Cache the complete response
-    auto expiration = std::chrono::steady_clock::now() + config_->defaultTtl();
+    auto expiration = std::chrono::steady_clock::now() + effective_default_ttl_;
 
     auto cached_entry = std::make_shared<CacheEntry>(std::move(buffered_body_),
                                                       std::move(response_headers_), expiration);
 
     // Insert into cache backend
     const std::string cache_key_copy = cache_key_;
-    cache_backend_->insert(cache_key_, cached_entry, config_->defaultTtl(),
+    cache_backend_->insert(cache_key_, cached_entry, effective_default_ttl_,
                            [cache_key_copy, cached_entry](bool success) {
                              if (success) {
                                ENVOY_LOG(info, "global_cache: cached response ({} bytes) for key: {}",

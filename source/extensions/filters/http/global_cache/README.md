@@ -6,22 +6,27 @@ single-flight 패턴을 제공합니다.
 
 ## 주요 기능
 
-- 요청 메서드/호스트/경로 기반의 캐시 키 생성 (`<METHOD>:<HOST>:<PATH>`)
+- 요청 메서드/호스트/경로 기반의 캐시 키 생성 (`<METHOD>:<HOST>:<PATH>`), 기본으로 쿼리 스트링 포함
 - 캐시된 응답 헤더/바디를 그대로 복원해 응답 제공
 - `x-cache` 헤더로 캐시 상태 노출 (`HIT`, `HIT-COALESCED`, `MISS`)
 - single-flight 패턴으로 동일 키의 동시 요청을 합류(coalesce)
 - 로컬 LRU 캐시, Redis 캐시, L1+L2(로컬+Redis) 계층형 캐시 지원
+- 라우트별 캐시 비활성화/TTL/쿼리 포함 여부 override 지원
 
 ## 동작 개요
 
-1. 요청 헤더를 바탕으로 캐시 키를 생성합니다.
+1. 라우트별 override를 적용한 뒤 요청 헤더로 캐시 키를 생성합니다.
 2. 캐시 조회 결과가 `HIT`이면 즉시 캐시된 응답을 반환합니다.
 3. `MISS`이면 single-flight 추적을 확인합니다.
    - 이미 동일 키의 요청이 진행 중이면 완료를 기다렸다가 결과를 재사용합니다.
    - `single_flight_timeout`이 만료되면 대기 요청은 upstream으로 진행합니다.
 4. upstream 응답은 `default_ttl` 동안 캐시 저장됩니다.
+   - 라우트별 override가 있으면 해당 TTL이 적용됩니다.
 
-참고: 현재 구현은 응답 헤더의 캐시 TTL을 해석하지 않고 `default_ttl`을 사용합니다.
+참고:
+- single-flight 대기는 이벤트 타이머로 관리되어 워커 스레드를 블로킹하지 않습니다.
+- 현재 구현은 응답 헤더의 캐시 TTL을 해석하지 않고 `default_ttl`을 사용합니다.
+  - 라우트별 override로 `default_ttl`을 다르게 설정할 수 있습니다.
 
 ## 설정 요약
 
@@ -67,6 +72,7 @@ single-flight 패턴을 제공합니다.
 - `enable_cluster_mode`
   - 설명: Redis Cluster 리다이렉션(MOVED/ASK) 지원 여부
   - 기본값: false (proto 기본값)
+- 참고: Redis 저장 시 응답 헤더/바디를 직렬화하고 remaining TTL을 함께 저장합니다.
 
 ### CacheBackendConfig.tiered (TieredCacheConfig)
 
@@ -140,4 +146,28 @@ single-flight 패턴을 제공합니다.
           enable_cluster_mode: true
         write_strategy: WRITE_THROUGH
         populate_l1_on_l2_hit: true
+```
+
+### 라우트별 override
+
+```yaml
+route_config:
+  virtual_hosts:
+  - name: local_service
+    domains: ["*"]
+    routes:
+    - match: { prefix: "/no-cache" }
+      route: { cluster: local_service }
+      typed_per_filter_config:
+        envoy.filters.http.global_cache:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
+          disabled: true
+    - match: { prefix: "/api" }
+      route: { cluster: local_service }
+      typed_per_filter_config:
+        envoy.filters.http.global_cache:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
+          overrides:
+            default_ttl: { seconds: 30 }
+            include_query_params: { value: false }
 ```

@@ -20,7 +20,7 @@ namespace {
  */
 CacheBackendSharedPtr createCacheBackend(
     const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config,
-    Server::Configuration::FactoryContext& context) {
+    Server::Configuration::ServerFactoryContext& context) {
 
   // Check if cache_backend is configured
   if (!proto_config.has_cache_backend()) {
@@ -37,10 +37,8 @@ CacheBackendSharedPtr createCacheBackend(
 
   case envoy::extensions::filters::http::global_cache::v3::CacheBackendConfig::kRedis:
     // Redis cache backend
-    return std::make_shared<RedisCache>(backend_config.redis(),
-                                        context.serverFactoryContext().clusterManager(),
-                                        context.serverFactoryContext().threadLocal(),
-                                        context.serverFactoryContext(), context.scope());
+    return std::make_shared<RedisCache>(backend_config.redis(), context.clusterManager(),
+                                        context.threadLocal(), context, context.scope());
 
   case envoy::extensions::filters::http::global_cache::v3::CacheBackendConfig::kTiered: {
     // Tiered cache (L1 local + L2)
@@ -53,10 +51,8 @@ CacheBackendSharedPtr createCacheBackend(
     CacheBackendSharedPtr l2;
     if (tiered_config.has_l2_redis()) {
       // Production: Use Redis as L2
-      l2 = std::make_shared<RedisCache>(tiered_config.l2_redis(),
-                                        context.serverFactoryContext().clusterManager(),
-                                        context.serverFactoryContext().threadLocal(),
-                                        context.serverFactoryContext(), context.scope());
+      l2 = std::make_shared<RedisCache>(tiered_config.l2_redis(), context.clusterManager(),
+                                        context.threadLocal(), context, context.scope());
     } else {
       // For testing: create another local cache as L2
       // In production config, this branch won't be used
@@ -80,7 +76,8 @@ CacheBackendSharedPtr createCacheBackend(
 
 absl::StatusOr<Http::FilterFactoryCb> GlobalCacheFilterFactory::createFilterFactoryFromProtoTyped(
     const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config,
-    const std::string& /*stats_prefix*/, Server::Configuration::FactoryContext& context) {
+    const std::string& /*stats_prefix*/, DualInfo,
+    Server::Configuration::ServerFactoryContext& context) {
 
   // Create cache backend based on configuration
   CacheBackendSharedPtr cache_backend = createCacheBackend(proto_config, context);
@@ -91,6 +88,13 @@ absl::StatusOr<Http::FilterFactoryCb> GlobalCacheFilterFactory::createFilterFact
   return [filter_config](Http::FilterChainFactoryCallbacks& callbacks) -> void {
     callbacks.addStreamFilter(std::make_shared<GlobalCacheFilter>(filter_config));
   };
+}
+
+absl::StatusOr<Router::RouteSpecificFilterConfigConstSharedPtr>
+GlobalCacheFilterFactory::createRouteSpecificFilterConfigTyped(
+    const envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute& proto_config,
+    Server::Configuration::ServerFactoryContext&, ProtobufMessage::ValidationVisitor&) {
+  return std::make_shared<GlobalCachePerRouteConfig>(proto_config);
 }
 
 REGISTER_FACTORY(GlobalCacheFilterFactory, Server::Configuration::NamedHttpFilterConfigFactory);

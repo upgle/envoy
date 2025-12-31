@@ -25,3 +25,4 @@ L2 히트 시 L1에 복제할 때 TTL을 다시 계산합니다.
 - `expiration_time - now` → 남은 TTL
 - 0 이하이면 복제하지 않음
 
+`expiration_time`은 전역 `default_ttl` 또는 라우트별 override TTL로 계산된 값입니다.

@@ -26,6 +26,13 @@ public:
     config_ = std::make_shared<GlobalCacheFilterConfig>(proto_config, cache_backend_);
   }
 
+  void setPerRouteConfig(
+      const envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute& proto_config) {
+    per_route_config_ = std::make_shared<GlobalCachePerRouteConfig>(proto_config);
+    ON_CALL(decoder_callbacks_, mostSpecificPerFilterConfig())
+        .WillByDefault(Return(per_route_config_.get()));
+  }
+
   void setupFilter() {
     filter_ = std::make_shared<GlobalCacheFilter>(config_);
     filter_->setDecoderFilterCallbacks(decoder_callbacks_);
@@ -38,6 +45,7 @@ protected:
   std::shared_ptr<GlobalCacheFilter> filter_;
   NiceMock<Http::MockStreamDecoderFilterCallbacks> decoder_callbacks_;
   NiceMock<Http::MockStreamEncoderFilterCallbacks> encoder_callbacks_;
+  std::shared_ptr<GlobalCachePerRouteConfig> per_route_config_;
 };
 
 // Test cache miss - first request goes to upstream
@@ -172,6 +180,80 @@ TEST_F(GlobalCacheFilterTest, MultipleDataChunks) {
   });
   ASSERT_NE(cached_entry, nullptr);
   EXPECT_EQ("chunk1chunk2chunk3", cached_entry->body.toString());
+}
+
+TEST_F(GlobalCacheFilterTest, PerRouteDisableSkipsCache) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute per_route;
+  per_route.set_disabled(true);
+  setPerRouteConfig(per_route);
+  setupFilter();
+
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/disabled"}, {":authority", "example.com"}};
+
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, false));
+
+  Buffer::OwnedImpl response_body("disabled response");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(0, local_cache->size());
+  EXPECT_TRUE(response_headers.get(Http::LowerCaseString("x-cache")).empty());
+}
+
+TEST_F(GlobalCacheFilterTest, PerRouteExcludeQueryParams) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute per_route;
+  auto* overrides = per_route.mutable_overrides();
+  overrides->mutable_include_query_params()->set_value(false);
+  setPerRouteConfig(per_route);
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers1{
+      {":method", "GET"}, {":path", "/api/data?user=1"}, {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers1, true));
+
+  Http::TestResponseHeaderMapImpl response_headers1{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers1, false));
+
+  Buffer::OwnedImpl response_body1("data");
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body1, true));
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers2{
+      {":method", "GET"}, {":path", "/api/data?user=2"}, {":authority", "example.com"}};
+
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers2, true));
+}
+
+TEST_F(GlobalCacheFilterTest, PerRouteDefaultTtlOverride) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute per_route;
+  auto* overrides = per_route.mutable_overrides();
+  overrides->mutable_default_ttl()->set_seconds(1);
+  setPerRouteConfig(per_route);
+  setupFilter();
+
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/ttl"}, {":authority", "example.com"}};
+
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
+
+  std::shared_ptr<CacheEntry> cached_entry;
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  local_cache->lookup("GET:example.com:/api/ttl", [&cached_entry](CacheLookupResult&& result) {
+    cached_entry = result.entry;
+  });
+  ASSERT_NE(cached_entry, nullptr);
+  const auto ttl = cached_entry->expiration_time - start;
+  EXPECT_GE(ttl, std::chrono::milliseconds(500));
+  EXPECT_LE(ttl, std::chrono::seconds(2));
 }
 
 } // namespace GlobalCache

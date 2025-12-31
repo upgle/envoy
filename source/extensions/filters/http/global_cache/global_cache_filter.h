@@ -11,10 +11,13 @@
 #include "envoy/event/dispatcher.h"
 #include "envoy/extensions/filters/http/global_cache/v3/global_cache.pb.h"
 #include "envoy/http/header_map.h"
+#include "envoy/router/router.h"
 
 #include "source/common/common/logger.h"
 #include "source/extensions/filters/http/common/pass_through_filter.h"
 #include "source/extensions/filters/http/global_cache/cache_backend.h"
+
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -51,6 +54,21 @@ private:
 };
 
 using GlobalCacheFilterConfigSharedPtr = std::shared_ptr<GlobalCacheFilterConfig>;
+
+class GlobalCachePerRouteConfig : public Router::RouteSpecificFilterConfig {
+public:
+  GlobalCachePerRouteConfig(
+      const envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute& config);
+
+  bool disabled() const { return disabled_; }
+  absl::optional<std::chrono::seconds> defaultTtlOverride() const { return default_ttl_override_; }
+  absl::optional<bool> includeQueryParamsOverride() const { return include_query_params_override_; }
+
+private:
+  const bool disabled_;
+  const absl::optional<std::chrono::seconds> default_ttl_override_;
+  const absl::optional<bool> include_query_params_override_;
+};
 
 /**
  * A filter that caches upstream responses using pluggable cache backends.
@@ -108,6 +126,9 @@ private:
   bool waiting_for_in_flight_{false};
   bool owns_in_flight_{false};
   std::string in_flight_key_;
+  std::chrono::seconds effective_default_ttl_;
+  bool include_query_params_{true};
+  bool cache_enabled_{true};
 };
 
 } // namespace GlobalCache

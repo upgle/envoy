@@ -14,6 +14,8 @@ Redis 캐시는 Envoy의 **Redis connection pool**을 사용합니다.
 - insert: Redis `SETEX` (TTL 포함)
 - remove: Redis `DEL`
 
+`SETEX`에 들어가는 TTL은 전역 `default_ttl` 또는 라우트별 override TTL입니다.
+
 ## 6.3 비동기 처리와 생명주기
 
 Redis 요청은 비동기입니다. 요청 객체는 응답이 올 때까지 살아있어야 합니다.
@@ -33,4 +35,3 @@ Go로 비유하면:
 - Null/Error → MISS
 
 성공이면 `CacheSerializer::deserialize()`로 CacheEntry 복원합니다.
-

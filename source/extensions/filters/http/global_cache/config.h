@@ -14,16 +14,23 @@ namespace GlobalCache {
  * Config registration for the global_cache filter.
  */
 class GlobalCacheFilterFactory
-    : public Common::ExceptionFreeFactoryBase<
-          envoy::extensions::filters::http::global_cache::v3::GlobalCache> {
+    : public Common::DualFactoryBase<
+          envoy::extensions::filters::http::global_cache::v3::GlobalCache,
+          envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute> {
 public:
-  GlobalCacheFilterFactory() : ExceptionFreeFactoryBase("envoy.filters.http.global_cache") {}
+  GlobalCacheFilterFactory() : DualFactoryBase("envoy.filters.http.global_cache") {}
 
 private:
   absl::StatusOr<Http::FilterFactoryCb> createFilterFactoryFromProtoTyped(
       const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config,
-      const std::string& stats_prefix,
-      Server::Configuration::FactoryContext& context) override;
+      const std::string& stats_prefix, DualInfo,
+      Server::Configuration::ServerFactoryContext& context) override;
+
+  absl::StatusOr<Router::RouteSpecificFilterConfigConstSharedPtr>
+  createRouteSpecificFilterConfigTyped(
+      const envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute& proto_config,
+      Server::Configuration::ServerFactoryContext& context,
+      ProtobufMessage::ValidationVisitor& validator) override;
 };
 
 } // namespace GlobalCache

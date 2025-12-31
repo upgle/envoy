@@ -35,7 +35,7 @@ class TestBackendHandler(BaseHTTPRequestHandler):
         self.wfile.write(response_body)
 
         # Log to console
-        print(f"[{datetime.now()}] Request #{self.request_count}: {self.path}")
+        print(f"[{datetime.now()}] Request #{self.request_count}: {self.path}", flush=True)
 
     def log_message(self, format, *args):
         # Suppress default logging
@@ -44,6 +44,6 @@ class TestBackendHandler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     server_address = ('', 8080)
     httpd = HTTPServer(server_address, TestBackendHandler)
-    print(f"Backend server listening on http://localhost:8080")
-    print(f"Ready to receive requests...")
+    print(f"Backend server listening on http://localhost:8080", flush=True)
+    print(f"Ready to receive requests...", flush=True)
     httpd.serve_forever()

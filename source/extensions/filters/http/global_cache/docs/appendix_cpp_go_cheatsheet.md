@@ -6,4 +6,4 @@
 - `std::function` ≈ Go의 함수 타입
 - `std::mutex`/`absl::Mutex` ≈ `sync.Mutex`
 - `Event::Dispatcher::createTimer` ≈ `time.AfterFunc`
-
+- `Router::RouteSpecificFilterConfig` ≈ 라우트별 override 설정
