@@ -40,7 +40,7 @@ CacheBackendSharedPtr createCacheBackend(
     return std::make_shared<RedisCache>(backend_config.redis(),
                                         context.serverFactoryContext().clusterManager(),
                                         context.serverFactoryContext().threadLocal(),
-                                        context.scope());
+                                        context.serverFactoryContext(), context.scope());
 
   case envoy::extensions::filters::http::global_cache::v3::CacheBackendConfig::kTiered: {
     // Tiered cache (L1 local + L2)
@@ -56,7 +56,7 @@ CacheBackendSharedPtr createCacheBackend(
       l2 = std::make_shared<RedisCache>(tiered_config.l2_redis(),
                                         context.serverFactoryContext().clusterManager(),
                                         context.serverFactoryContext().threadLocal(),
-                                        context.scope());
+                                        context.serverFactoryContext(), context.scope());
     } else {
       // For testing: create another local cache as L2
       // In production config, this branch won't be used

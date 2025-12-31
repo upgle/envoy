@@ -69,11 +69,15 @@ envoy_cc_library(
         "//envoy/upstream:cluster_manager_interface",
         "//source/common/common:assert_lib",
         "//source/common/common:logger_lib",
+        "//source/common/protobuf:utility_lib",
+        "//source/extensions/common/redis:cluster_refresh_manager_lib",
         "//source/extensions/filters/network/common/redis:client_lib",
         "//source/extensions/filters/network/common/redis:codec_lib",
         "//source/extensions/filters/network/common/redis:redis_command_stats_lib",
         "//source/extensions/filters/network/common/redis:utility_lib",
+        "//source/extensions/filters/network/redis_proxy:conn_pool_lib",
         "@envoy_api//envoy/extensions/filters/http/global_cache/v3:pkg_cc_proto",
+        "@com_google_absl//absl/strings",
     ],
 )
 
