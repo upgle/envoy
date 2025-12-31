@@ -66,10 +66,10 @@ single-flight 패턴을 제공합니다.
   - 기본값: true
   - 참고: false이면 경로에서 쿼리를 제거하며, `query_params_included`/`query_params_excluded`는 무시됩니다.
 - `query_params_included`
-  - 설명: 지정된 이름의 쿼리만 포함(allowlist)
+  - 설명: 지정된 이름의 쿼리만 **캐시 키에 포함**(allowlist)
   - 기본값: 비어 있음(전체 포함)
 - `query_params_excluded`
-  - 설명: 지정된 이름의 쿼리를 제외(blocklist)
+  - 설명: 지정된 이름의 쿼리를 **캐시 키에서 제외**(blocklist)
   - 기본값: 비어 있음
   - 참고: `query_params_included`가 설정되어 있어도 `query_params_excluded`가 우선 적용됩니다.
 - `headers_included`
@@ -78,9 +78,11 @@ single-flight 패턴을 제공합니다.
   - 참고: 동일 헤더의 다중 값은 `,`로 연결됩니다.
 
 쿼리 파라미터 처리 규칙:
+- 이 옵션들은 **캐시 키에 포함할 쿼리 파라미터를 결정**하는 설정이며,
+  특정 파라미터가 있어도 요청 자체가 캐시에서 제외되지는 않습니다.
 - `include_query_params`가 true이고 `query_params_included`/`query_params_excluded`가 비어 있으면 원본 쿼리를 그대로 사용합니다.
 - `query_params_included`가 비어 있지 않으면 allowlist로 동작합니다.
-- `query_params_excluded`에 있는 이름은 항상 제외됩니다.
+- `query_params_excluded`에 있는 이름은 항상 캐시 키에서 제외됩니다.
 
 ### CacheBackendConfig.local (LocalCacheConfig)
 
@@ -250,6 +252,11 @@ cache_key:
   include_query_params: { value: true }
   query_params_excluded: ["utm_source", "debug"]
 ```
+
+쿼리 필터링 결과 예시:
+- 요청: `GET /search?q=envoy&user=kim&debug=1`
+- 설정: `query_params_included: ["q", "user"]`, `query_params_excluded: ["debug"]`
+- 캐시 키 경로: `/search?q=envoy&user=kim` (debug는 키에서 제외)
 
 ### 라우트별 예시
 

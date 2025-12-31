@@ -34,9 +34,11 @@
 - `headers_included`: 캐시 키에 포함할 요청 헤더 이름 목록
 
 쿼리 파라미터 규칙:
+- 이 옵션들은 **캐시 키에 포함할 쿼리 파라미터를 결정**하는 설정이며,
+  특정 파라미터가 있어도 요청 자체가 캐시에서 제외되지는 않습니다.
 - `include_query_params`가 false이면 쿼리를 제거하며 `query_params_included`/`query_params_excluded`는 무시됩니다.
 - `query_params_included`가 비어 있지 않으면 allowlist로 동작합니다.
-- `query_params_excluded`에 있는 이름은 항상 제외됩니다.
+- `query_params_excluded`에 있는 이름은 항상 캐시 키에서 제외됩니다.
 
 요청 헤더 규칙:
 - 동일 헤더의 다중 값은 `,`로 연결되어 키에 포함됩니다.
@@ -83,6 +85,11 @@ cache_key:
   include_query_params: { value: true }
   query_params_excluded: ["utm_source", "debug"]
 ```
+
+쿼리 필터링 결과 예시:
+- 요청: `GET /search?q=envoy&user=kim&debug=1`
+- 설정: `query_params_included: ["q", "user"]`, `query_params_excluded: ["debug"]`
+- 캐시 키 경로: `/search?q=envoy&user=kim` (debug는 키에서 제외)
 
 ### 9.6 per-route cache_key 예시
 
