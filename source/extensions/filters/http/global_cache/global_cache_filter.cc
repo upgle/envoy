@@ -98,12 +98,6 @@ GlobalCachePerRouteConfig::GlobalCachePerRouteConfig(
                     std::chrono::seconds(PROTOBUF_GET_MS_REQUIRED(config.overrides(), default_ttl) /
                                          1000))
               : absl::nullopt),
-      include_query_params_override_(
-          config.override_case() ==
-                  envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute::kOverrides &&
-              config.overrides().has_include_query_params()
-              ? absl::optional<bool>(config.overrides().include_query_params().value())
-              : absl::nullopt),
       cache_key_override_(
           config.override_case() ==
                   envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute::kOverrides &&
@@ -249,10 +243,6 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
       effective_cache_key_config_ = cache_key_override.value();
     } else {
       effective_cache_key_config_ = config_->cacheKeyConfig();
-      if (auto include_override = per_route_config->includeQueryParamsOverride();
-          include_override.has_value()) {
-        effective_cache_key_config_.include_query_params = include_override.value();
-      }
     }
   } else {
     effective_cache_key_config_ = config_->cacheKeyConfig();

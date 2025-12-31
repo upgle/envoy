@@ -12,7 +12,7 @@ single-flight 패턴을 제공합니다.
 - `x-cache` 헤더로 캐시 상태 노출 (`HIT`, `HIT-COALESCED`, `MISS`)
 - single-flight 패턴으로 동일 키의 동시 요청을 합류(coalesce)
 - 로컬 LRU 캐시, Redis 캐시, L1+L2(로컬+Redis) 계층형 캐시 지원
-- 라우트별 캐시 비활성화/TTL/쿼리 포함 여부 override 지원
+- 라우트별 캐시 비활성화/TTL/cache_key override 지원
 
 ## 동작 개요
 
@@ -107,7 +107,7 @@ single-flight 패턴을 제공합니다.
   - 기본값: `envoy:gc:`
 - `enable_cluster_mode`
   - 설명: Redis Cluster 리다이렉션(MOVED/ASK) 지원 여부
-  - 기본값: false (proto 기본값)
+  - 기본값: true
 - 참고: Redis 저장 시 응답 헤더/바디를 직렬화하고 remaining TTL을 함께 저장합니다.
 
 ### CacheBackendConfig.tiered (TieredCacheConfig)
@@ -205,11 +205,11 @@ route_config:
           "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
           overrides:
             default_ttl: { seconds: 30 }
-            include_query_params: { value: false }
+            cache_key:
+              include_query_params: { value: false }
 ```
 
 참고:
-- `overrides.include_query_params`는 레거시 옵션으로, `overrides.cache_key`가 없을 때만 적용됩니다.
 - `overrides.cache_key`가 설정되면 해당 라우트에서는 필터 레벨 `cache_key`를 완전히 대체합니다.
 
 ### 캐시 키 커스터마이즈
@@ -251,16 +251,7 @@ cache_key:
   query_params_excluded: ["utm_source", "debug"]
 ```
 
-### 라우트별 예시 (legacy vs cache_key)
-
-```yaml
-# legacy include_query_params: cache_key가 없을 때만 적용
-typed_per_filter_config:
-  envoy.filters.http.global_cache:
-    "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
-    overrides:
-      include_query_params: { value: false }
-```
+### 라우트별 예시
 
 ```yaml
 # cache_key가 설정되면 전역 cache_key를 완전히 대체

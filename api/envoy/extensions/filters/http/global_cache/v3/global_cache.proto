@@ -101,13 +101,11 @@ message GlobalCachePerRoute {
       lte {seconds: 86400}  // Max 24 hours
     }];
 
-    // Whether to include URL query parameters in the cache key.
-    // When unset, defaults to the filter-level behavior (currently includes query parameters).
-    google.protobuf.BoolValue include_query_params = 2;
-
     // Per-route cache key configuration. If set, this fully replaces the filter-level cache key
     // configuration for this route.
     CacheKeyConfig cache_key = 3;
+
+    reserved 2;
   }
 }
 

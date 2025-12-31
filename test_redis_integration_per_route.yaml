@@ -34,7 +34,8 @@ static_resources:
                   envoy.filters.http.global_cache:
                     "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
                     overrides:
-                      include_query_params: { value: false }
+                      cache_key:
+                        include_query_params: { value: false }
               - match:
                   prefix: "/ttl"
                 route:

@@ -75,13 +75,11 @@ public:
 
   bool disabled() const { return disabled_; }
   absl::optional<std::chrono::seconds> defaultTtlOverride() const { return default_ttl_override_; }
-  absl::optional<bool> includeQueryParamsOverride() const { return include_query_params_override_; }
   const absl::optional<CacheKeyConfig>& cacheKeyOverride() const { return cache_key_override_; }
 
 private:
   const bool disabled_;
   const absl::optional<std::chrono::seconds> default_ttl_override_;
-  const absl::optional<bool> include_query_params_override_;
   const absl::optional<CacheKeyConfig> cache_key_override_;
 };
 

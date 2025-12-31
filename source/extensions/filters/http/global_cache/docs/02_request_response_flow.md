@@ -7,7 +7,7 @@
 1. **라우트별 override 확인**
    - `disabled`, `default_ttl`, `cache_key` 적용
    - `cache_key`가 없으면 필터 전역 `cache_key`를 사용
-   - legacy인 `include_query_params`는 `cache_key.include_query_params`를 보완
+   - `cache_key`가 설정되면 필터 전역 `cache_key`를 대체
    - `disabled`면 캐시 로직을 건너뜀
 
 2. **캐시 키 생성**

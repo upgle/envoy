@@ -212,7 +212,7 @@ TEST_F(GlobalCacheFilterTest, PerRouteDisableSkipsCache) {
 TEST_F(GlobalCacheFilterTest, PerRouteExcludeQueryParams) {
   envoy::extensions::filters::http::global_cache::v3::GlobalCachePerRoute per_route;
   auto* overrides = per_route.mutable_overrides();
-  overrides->mutable_include_query_params()->set_value(false);
+  overrides->mutable_cache_key()->mutable_include_query_params()->set_value(false);
   setPerRouteConfig(per_route);
 
   setupFilter();

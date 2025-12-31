@@ -20,7 +20,7 @@
 - `default_ttl`: 응답 저장 기본 TTL
 - `cache_key`: 캐시 키 구성(스킴/호스트/경로/쿼리/헤더)
 - 로컬 캐시: `max_entries`, `max_bytes`
-- Redis: `cluster_name`, `op_timeout`, `key_prefix`, `enable_cluster_mode`
+- Redis: `cluster_name`, `op_timeout`, `key_prefix`, `enable_cluster_mode` (기본 true)
 - Tiered: `write_strategy`, `populate_l1_on_l2_hit`
 
 ### 9.2.1 CacheKeyConfig 세부 스펙
@@ -45,11 +45,7 @@
 
 - `disabled`: 해당 라우트에서 캐시 비활성화/활성화
 - `overrides.default_ttl`: 라우트별 TTL
-- `overrides.include_query_params`: 캐시 키에 쿼리 스트링 포함 여부(legacy)
 - `overrides.cache_key`: 라우트별 캐시 키 구성(설정 시 전역 cache_key를 대체)
-
-legacy 동작:
-- `overrides.include_query_params`는 `overrides.cache_key`가 없을 때만 적용됩니다.
 
 ### 9.4 CacheKeyConfig 예시
 
@@ -88,16 +84,7 @@ cache_key:
   query_params_excluded: ["utm_source", "debug"]
 ```
 
-### 9.6 per-route legacy vs cache_key
-
-```yaml
-# legacy include_query_params: cache_key가 없을 때만 적용
-typed_per_filter_config:
-  envoy.filters.http.global_cache:
-    "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
-    overrides:
-      include_query_params: { value: false }
-```
+### 9.6 per-route cache_key 예시
 
 ```yaml
 # cache_key가 설정되면 전역 cache_key를 완전히 대체
