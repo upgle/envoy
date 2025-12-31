@@ -48,6 +48,8 @@ public:
     filter_->setEncoderFilterCallbacks(encoder_callbacks_);
   }
 
+  std::string currentCacheKey() const { return filter_->cache_key_; }
+
 protected:
   CacheBackendSharedPtr cache_backend_;
   GlobalCacheFilterConfigSharedPtr config_;
@@ -184,7 +186,7 @@ TEST_F(GlobalCacheFilterTest, MultipleDataChunks) {
 
   // Verify cached body contains all chunks by looking up the entry
   std::shared_ptr<CacheEntry> cached_entry;
-  local_cache->lookup("GET:example.com:/api/chunked", [&cached_entry](CacheLookupResult&& result) {
+  local_cache->lookup(currentCacheKey(), [&cached_entry](CacheLookupResult&& result) {
     cached_entry = result.entry;
   });
   ASSERT_NE(cached_entry, nullptr);
@@ -256,7 +258,7 @@ TEST_F(GlobalCacheFilterTest, PerRouteDefaultTtlOverride) {
 
   std::shared_ptr<CacheEntry> cached_entry;
   auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
-  local_cache->lookup("GET:example.com:/api/ttl", [&cached_entry](CacheLookupResult&& result) {
+  local_cache->lookup(currentCacheKey(), [&cached_entry](CacheLookupResult&& result) {
     cached_entry = result.entry;
   });
   ASSERT_NE(cached_entry, nullptr);

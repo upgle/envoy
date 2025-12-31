@@ -8,6 +8,7 @@
 #include <atomic>
 
 #include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -53,6 +54,11 @@ CacheKeyConfig makeCacheKeyConfig(
   }
 
   return config;
+}
+
+void appendKeyPart(std::string& key, absl::string_view tag, absl::string_view value) {
+  absl::StrAppend(&key, "|", tag, ":", value.size(), ":");
+  key.append(value.data(), value.size());
 }
 
 } // namespace
@@ -173,23 +179,20 @@ bool GlobalCacheFilter::isCacheableResponse(const Http::ResponseHeaderMap& heade
 std::string GlobalCacheFilter::generateCacheKey(const Http::RequestHeaderMap& headers) {
   std::string key;
   if (headers.Method()) {
-    key += std::string(headers.Method()->value().getStringView());
+    appendKeyPart(key, "m", headers.Method()->value().getStringView());
   }
   if (effective_cache_key_config_.include_scheme) {
-    key += ":";
     if (headers.Scheme()) {
-      key += std::string(headers.Scheme()->value().getStringView());
+      appendKeyPart(key, "s", headers.Scheme()->value().getStringView());
     }
   }
   if (effective_cache_key_config_.include_host) {
-    key += ":";
     if (headers.Host()) {
-      key += std::string(headers.Host()->value().getStringView());
+      appendKeyPart(key, "h", headers.Host()->value().getStringView());
     }
   }
   if (effective_cache_key_config_.include_path) {
-    key += ":";
-    key += buildPathForCacheKey(headers);
+    appendKeyPart(key, "p", buildPathForCacheKey(headers));
   }
   if (!effective_cache_key_config_.headers_included.empty()) {
     key += buildHeaderKeyFragment(headers);
@@ -239,19 +242,12 @@ std::string GlobalCacheFilter::buildHeaderKeyFragment(const Http::RequestHeaderM
   std::string fragment;
 
   for (const auto& header_name : effective_cache_key_config_.headers_included) {
-    fragment += ":h:";
-    fragment += header_name.get();
-    fragment += "=";
+    appendKeyPart(fragment, "hn", header_name.get());
 
     const auto values = headers.get(header_name);
-    bool first = true;
     for (size_t i = 0; i < values.size(); ++i) {
       const auto* entry = values[i];
-      if (!first) {
-        fragment += ",";
-      }
-      fragment += std::string(entry->value().getStringView());
-      first = false;
+      appendKeyPart(fragment, "hv", entry->value().getStringView());
     }
   }
 

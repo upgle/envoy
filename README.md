@@ -27,6 +27,69 @@ involved and how Envoy plays a role, read the CNCF
 * [Blog](https://medium.com/@mattklein123/the-universal-data-plane-api-d15cec7a) about universal data plane API
 * [Blog](https://medium.com/@mattklein123/lyfts-envoy-dashboards-5c91738816b1) on Lyft's Envoy dashboards
 
+## Redis Cluster (Envoy Cluster) Setup
+
+To use Redis Cluster as an Envoy upstream (for example, the Global Cache Redis backend), enable
+cluster mode in the Redis cache config and point the Envoy cluster at your Redis nodes.
+
+Redis cache backend (example from `test_redis_integration.yaml`):
+```yaml
+cache_backend:
+  redis:
+    cluster_name: redis_cluster
+    key_prefix: "envoy:test:"
+    op_timeout:
+      seconds: 1
+    enable_cluster_mode: true
+```
+
+Redis cluster definition (seed with your node addresses):
+```yaml
+- name: redis_cluster
+  connect_timeout: 1s
+  type: STATIC
+  lb_policy: MAGLEV
+  load_assignment:
+    cluster_name: redis_cluster
+    endpoints:
+    - lb_endpoints:
+      - endpoint:
+          address:
+            socket_address:
+              address: 127.0.0.1
+              port_value: 7000
+      - endpoint:
+          address:
+            socket_address:
+              address: 127.0.0.1
+              port_value: 7001
+      - endpoint:
+          address:
+            socket_address:
+              address: 127.0.0.1
+              port_value: 7002
+  health_checks:
+  - timeout: 1s
+    interval: 10s
+    unhealthy_threshold: 2
+    healthy_threshold: 2
+    custom_health_check:
+      name: envoy.health_checkers.redis
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.health_checkers.redis.v3.Redis
+```
+
+Notes:
+* `cluster_name` must match the Envoy cluster name.
+* `enable_cluster_mode: true` tells Envoy to use Redis Cluster slot discovery.
+* List enough nodes to cover your primaries (and replicas if you want read routing).
+
+See `test_redis_integration.yaml` and `test_redis_integration_per_route.yaml` for full examples.
+For a quick local check, `verify_global_cache.sh` supports Redis Cluster with:
+```bash
+REDIS_CLUSTER_MODE=true CONFIG_FILE=test_redis_integration.yaml ./verify_global_cache.sh
+```
+
 ## Related
 
 * [data-plane-api](https://github.com/envoyproxy/data-plane-api): v2 API definitions as a standalone
