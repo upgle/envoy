@@ -54,10 +54,9 @@ CacheKeyConfig makeCacheKeyConfig(
 
 } // namespace
 
-// Initialize in-flight request tracking for single-flight pattern
-std::unordered_map<std::string, std::shared_ptr<InFlightRequest>>
+// Initialize in-flight request tracking for single-flight pattern (per-worker TLS).
+thread_local std::unordered_map<std::string, std::shared_ptr<InFlightRequest>>
     GlobalCacheFilter::in_flight_requests_;
-std::mutex GlobalCacheFilter::in_flight_mutex_;
 
 GlobalCacheFilterConfig::GlobalCacheFilterConfig(
     const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config,
@@ -278,7 +277,6 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
     bool is_first_request = false;
 
     {
-      std::unique_lock<std::mutex> lock(in_flight_mutex_);
       auto it = in_flight_requests_.find(cache_key_);
 
       if (it != in_flight_requests_.end()) {
@@ -491,21 +489,18 @@ void GlobalCacheFilter::onSingleFlightTimeout() {
 void GlobalCacheFilter::notifyInFlightWaiters(const std::string& key,
                                               const std::shared_ptr<CacheEntry>& entry) {
   std::vector<std::shared_ptr<GlobalCacheFilter>> waiters;
-  {
-    std::unique_lock<std::mutex> lock(in_flight_mutex_);
-    auto it = in_flight_requests_.find(key);
-    if (it == in_flight_requests_.end()) {
-      return;
-    }
-    it->second->completed = true;
-    it->second->result = entry;
-    for (const auto& waiter : it->second->waiters) {
-      if (auto filter = waiter.lock()) {
-        waiters.push_back(filter);
-      }
-    }
-    in_flight_requests_.erase(it);
+  auto it = in_flight_requests_.find(key);
+  if (it == in_flight_requests_.end()) {
+    return;
   }
+  it->second->completed = true;
+  it->second->result = entry;
+  for (const auto& waiter : it->second->waiters) {
+    if (auto filter = waiter.lock()) {
+      waiters.push_back(filter);
+    }
+  }
+  in_flight_requests_.erase(it);
 
   for (const auto& waiter : waiters) {
     waiter->onInFlightComplete(entry);

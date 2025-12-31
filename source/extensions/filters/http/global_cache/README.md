@@ -26,6 +26,11 @@ single-flight 패턴을 제공합니다.
 
 참고:
 - single-flight 대기는 이벤트 타이머로 관리되어 워커 스레드를 블로킹하지 않습니다.
+- single-flight 상태는 워커별 TLS에 저장됩니다. 이는 필터 콜백/타이머가 해당 워커
+  디스패처에서만 실행되어야 한다는 Envoy 스레드 모델을 보장하기 위함입니다.
+  따라서 동일 키에 대해 워커 수만큼 in-flight 요청이 동시에 존재할 수 있습니다.
+- 동시 요청 테스트에서는 `--concurrency 2` 환경에서 동일 키로 8개 요청을 동시에 보내면
+  `MISS` 2건과 `HIT-COALESCED` 6건이 관찰됩니다(워커마다 1개 upstream 요청).
 - 현재 구현은 응답 헤더의 캐시 TTL을 해석하지 않고 `default_ttl`을 사용합니다.
   - 라우트별 override로 `default_ttl`을 다르게 설정할 수 있습니다.
 

@@ -1,6 +1,9 @@
 #include "source/extensions/filters/http/global_cache/global_cache_filter.h"
 #include "source/extensions/filters/http/global_cache/local_cache.h"
 
+#include <atomic>
+#include <thread>
+
 #include "test/mocks/http/mocks.h"
 #include "test/mocks/server/factory_context.h"
 
@@ -319,6 +322,31 @@ TEST_F(GlobalCacheFilterTest, CacheKeyQueryParamAllowlist) {
       {":authority", "example.com"}};
   EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
             filter_->decodeHeaders(request_headers2, true));
+}
+
+TEST_F(GlobalCacheFilterTest, InFlightRequestsAreThreadLocal) {
+  GlobalCacheFilter::in_flight_requests_.clear();
+  GlobalCacheFilter::in_flight_requests_.emplace("main",
+                                                 std::make_shared<InFlightRequest>());
+
+  std::atomic<size_t> other_thread_size{0};
+  std::atomic<bool> other_thread_has_main{false};
+
+  std::thread worker([&]() {
+    other_thread_size.store(GlobalCacheFilter::in_flight_requests_.size());
+    other_thread_has_main.store(GlobalCacheFilter::in_flight_requests_.contains("main"));
+    GlobalCacheFilter::in_flight_requests_.emplace("worker",
+                                                   std::make_shared<InFlightRequest>());
+  });
+  worker.join();
+
+  EXPECT_EQ(1, GlobalCacheFilter::in_flight_requests_.size());
+  EXPECT_TRUE(GlobalCacheFilter::in_flight_requests_.contains("main"));
+  EXPECT_FALSE(GlobalCacheFilter::in_flight_requests_.contains("worker"));
+  EXPECT_EQ(0, other_thread_size.load());
+  EXPECT_FALSE(other_thread_has_main.load());
+
+  GlobalCacheFilter::in_flight_requests_.clear();
 }
 
 } // namespace GlobalCache

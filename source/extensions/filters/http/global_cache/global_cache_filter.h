@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -109,8 +108,8 @@ public:
 
   // Single-flight pattern: track in-flight requests to prevent thundering herd
   // Still using static storage for cross-request coordination
-  static std::unordered_map<std::string, std::shared_ptr<InFlightRequest>> in_flight_requests_;
-  static std::mutex in_flight_mutex_;
+  static thread_local std::unordered_map<std::string, std::shared_ptr<InFlightRequest>>
+      in_flight_requests_;
 
 private:
   enum class FilterState {
