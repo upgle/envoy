@@ -14,24 +14,12 @@
 
 #include "source/common/common/logger.h"
 #include "source/extensions/filters/http/common/pass_through_filter.h"
+#include "source/extensions/filters/http/global_cache/cache_backend.h"
 
 namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace GlobalCache {
-
-/**
- * Cache entry that stores response data and expiration time.
- */
-struct CacheEntry {
-  Buffer::OwnedImpl body;
-  Http::ResponseHeaderMapPtr headers;
-  std::chrono::steady_clock::time_point expiration_time;
-
-  CacheEntry(Buffer::OwnedImpl body_data, Http::ResponseHeaderMapPtr header_map,
-             std::chrono::steady_clock::time_point exp_time)
-      : body(std::move(body_data)), headers(std::move(header_map)), expiration_time(exp_time) {}
-};
 
 /**
  * Tracks an in-flight request to prevent duplicate upstream requests for the same cache key.
@@ -49,18 +37,24 @@ struct InFlightRequest {
 class GlobalCacheFilterConfig {
 public:
   GlobalCacheFilterConfig(
-      const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config);
+      const envoy::extensions::filters::http::global_cache::v3::GlobalCache& proto_config,
+      CacheBackendSharedPtr cache_backend);
 
   std::chrono::milliseconds singleFlightTimeout() const { return single_flight_timeout_; }
+  std::chrono::seconds defaultTtl() const { return default_ttl_; }
+  CacheBackendSharedPtr cacheBackend() const { return cache_backend_; }
 
 private:
   std::chrono::milliseconds single_flight_timeout_;
+  std::chrono::seconds default_ttl_;
+  CacheBackendSharedPtr cache_backend_;
 };
 
 using GlobalCacheFilterConfigSharedPtr = std::shared_ptr<GlobalCacheFilterConfig>;
 
 /**
- * A filter that caches upstream responses in memory for 5 minutes.
+ * A filter that caches upstream responses using pluggable cache backends.
+ * Supports local LRU cache, Redis, and tiered caching.
  */
 class GlobalCacheFilter : public Http::PassThroughFilter,
                           public Logger::Loggable<Logger::Id::filter> {
@@ -80,12 +74,8 @@ public:
                                           bool end_stream) override;
   Http::FilterDataStatus encodeData(Buffer::Instance& data, bool end_stream) override;
 
-  // Global cache storage (5 minute TTL) - public for testing
-  static std::unordered_map<std::string, std::shared_ptr<CacheEntry>> cache_;
-  static std::mutex cache_mutex_;
-  static constexpr std::chrono::minutes CACHE_TTL{5};
-
   // Single-flight pattern: track in-flight requests to prevent thundering herd
+  // Still using static storage for cross-request coordination
   static std::unordered_map<std::string, std::shared_ptr<InFlightRequest>> in_flight_requests_;
   static std::mutex in_flight_mutex_;
 
@@ -99,8 +89,11 @@ private:
   };
 
   std::string generateCacheKey(const Http::RequestHeaderMap& headers);
+  void serveCachedResponse(const std::shared_ptr<CacheEntry>& entry, const std::string& cache_status);
 
   GlobalCacheFilterConfigSharedPtr config_;
+  CacheBackendSharedPtr cache_backend_;
+
   std::string cache_key_;
   Buffer::OwnedImpl buffered_body_;
   Http::ResponseHeaderMapPtr response_headers_{nullptr};

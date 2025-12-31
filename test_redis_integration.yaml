@@ -1,0 +1,88 @@
+static_resources:
+  listeners:
+  - name: main_listener
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 10000
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: backend
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: backend_service
+          http_filters:
+          # Global cache filter with Redis backend
+          - name: envoy.filters.http.global_cache
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCache
+              single_flight_timeout:
+                seconds: 5
+              cache_backend:
+                redis:
+                  cluster_name: redis_cluster
+                  key_prefix: "envoy:test:"
+                  op_timeout:
+                    seconds: 1
+                  enable_cluster_mode: false
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+  # Backend service cluster
+  - name: backend_service
+    connect_timeout: 0.25s
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: backend_service
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 8080
+
+  # Redis cluster for caching
+  - name: redis_cluster
+    connect_timeout: 1s
+    type: STATIC
+    lb_policy: MAGLEV
+    load_assignment:
+      cluster_name: redis_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 6379
+    # Health check for Redis
+    health_checks:
+    - timeout: 1s
+      interval: 10s
+      unhealthy_threshold: 2
+      healthy_threshold: 2
+      custom_health_check:
+        name: envoy.health_checkers.redis
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.health_checkers.redis.v3.Redis
+
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901

@@ -1,4 +1,5 @@
 #include "source/extensions/filters/http/global_cache/global_cache_filter.h"
+#include "source/extensions/filters/http/global_cache/local_cache.h"
 
 #include "test/mocks/http/mocks.h"
 #include "test/mocks/server/factory_context.h"
@@ -18,11 +19,11 @@ namespace GlobalCache {
 class GlobalCacheFilterTest : public testing::Test {
 public:
   GlobalCacheFilterTest() {
-    // Clear the global cache before each test
-    GlobalCacheFilter::cache_.clear();
+    // Create a local cache backend for testing
+    cache_backend_ = std::make_shared<LocalCache>();
 
     envoy::extensions::filters::http::global_cache::v3::GlobalCache proto_config;
-    config_ = std::make_shared<GlobalCacheFilterConfig>(proto_config);
+    config_ = std::make_shared<GlobalCacheFilterConfig>(proto_config, cache_backend_);
   }
 
   void setupFilter() {
@@ -32,6 +33,7 @@ public:
   }
 
 protected:
+  CacheBackendSharedPtr cache_backend_;
   GlobalCacheFilterConfigSharedPtr config_;
   std::shared_ptr<GlobalCacheFilter> filter_;
   NiceMock<Http::MockStreamDecoderFilterCallbacks> decoder_callbacks_;
@@ -57,8 +59,9 @@ TEST_F(GlobalCacheFilterTest, CacheMiss) {
   Buffer::OwnedImpl response_body("test response");
   EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body, true));
 
-  // Verify response was cached
-  EXPECT_EQ(1, GlobalCacheFilter::cache_.size());
+  // Verify response was cached (check cache backend size)
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(1, local_cache->size());
 }
 
 // Test cache hit - second request served from cache
@@ -111,7 +114,8 @@ TEST_F(GlobalCacheFilterTest, DifferentCacheKeys) {
   EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers2, true));
 
   // Should have 1 entry in cache (first request)
-  EXPECT_EQ(1, GlobalCacheFilter::cache_.size());
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(1, local_cache->size());
 }
 
 // Test empty body response
@@ -127,7 +131,8 @@ TEST_F(GlobalCacheFilterTest, EmptyBodyResponse) {
   EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
 
   // Should be cached even with no body
-  EXPECT_EQ(1, GlobalCacheFilter::cache_.size());
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(1, local_cache->size());
 
   // Second request should hit cache
   setupFilter();
@@ -157,10 +162,15 @@ TEST_F(GlobalCacheFilterTest, MultipleDataChunks) {
   EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(chunk3, true));
 
   // Should be cached
-  EXPECT_EQ(1, GlobalCacheFilter::cache_.size());
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(1, local_cache->size());
 
-  // Verify cached body contains all chunks
-  auto cached_entry = GlobalCacheFilter::cache_.begin()->second;
+  // Verify cached body contains all chunks by looking up the entry
+  std::shared_ptr<CacheEntry> cached_entry;
+  local_cache->lookup("GET:example.com:/api/chunked", [&cached_entry](CacheLookupResult&& result) {
+    cached_entry = result.entry;
+  });
+  ASSERT_NE(cached_entry, nullptr);
   EXPECT_EQ("chunk1chunk2chunk3", cached_entry->body.toString());
 }
 

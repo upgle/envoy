@@ -32,4 +32,101 @@ message GlobalCache {
     gte {seconds: 0}
     lte {seconds: 300}
   }];
+
+  // Default TTL for cached entries if not specified by response headers.
+  // Default: 5 minutes
+  google.protobuf.Duration default_ttl = 2 [(validate.rules).duration = {
+    gte {seconds: 1}
+    lte {seconds: 86400}  // Max 24 hours
+  }];
+
+  // Cache backend configuration.
+  // If not specified, uses in-memory local cache with default settings.
+  CacheBackendConfig cache_backend = 3;
+}
+
+// Configuration for cache backend (local, Redis, or tiered).
+message CacheBackendConfig {
+  oneof backend_type {
+    option (validate.required) = false;
+
+    // Local in-memory LRU cache.
+    LocalCacheConfig local = 1;
+
+    // Redis cache backend (cluster or standalone).
+    RedisCacheConfig redis = 2;
+
+    // Two-tier cache: L1 (local) + L2 (Redis).
+    TieredCacheConfig tiered = 3;
+  }
+}
+
+// Configuration for local in-memory LRU cache.
+message LocalCacheConfig {
+  // Maximum number of entries in the cache.
+  // When the limit is reached, least recently used entries are evicted.
+  // Default: 1000
+  uint32 max_entries = 1 [(validate.rules).uint32 = {
+    gte: 1
+    lte: 1000000
+  }];
+
+  // Maximum total size in bytes for all cached entries.
+  // When the limit is reached, least recently used entries are evicted.
+  // Default: 104857600 (100 MB)
+  uint64 max_bytes = 2 [(validate.rules).uint64 = {gte: 1048576}];  // Min 1 MB
+}
+
+// Configuration for Redis cache backend.
+message RedisCacheConfig {
+  // Name of the upstream cluster running Redis.
+  // The cluster must be configured in Envoy's cluster manager.
+  string cluster_name = 1 [(validate.rules).string = {min_len: 1}];
+
+  // Timeout for Redis operations (GET, SET, DEL).
+  // Default: 100ms
+  google.protobuf.Duration op_timeout = 2 [(validate.rules).duration = {
+    gte {nanos: 1000000}  // 1ms minimum
+    lte {seconds: 10}
+  }];
+
+  // Prefix for all cache keys stored in Redis.
+  // Useful for namespacing and avoiding key collisions.
+  // Default: "envoy:gc:"
+  string key_prefix = 3;
+
+  // Enable Redis cluster mode support (MOVED/ASK redirections).
+  // Set to false for standalone Redis or Redis Sentinel.
+  // Default: true
+  bool enable_cluster_mode = 4;
+}
+
+// Configuration for two-tier caching (L1 local + L2 Redis).
+message TieredCacheConfig {
+  // L1 local cache configuration (required).
+  LocalCacheConfig l1_local = 1 [(validate.rules).message = {required: true}];
+
+  // L2 Redis cache configuration (required).
+  RedisCacheConfig l2_redis = 2 [(validate.rules).message = {required: true}];
+
+  // Write strategy for the tiered cache.
+  // Default: WRITE_THROUGH
+  WriteStrategy write_strategy = 3;
+
+  enum WriteStrategy {
+    // Write to both L1 and L2 synchronously.
+    // Insert completes when both succeed.
+    // Provides strong consistency but higher latency.
+    WRITE_THROUGH = 0;
+
+    // Write to L1 immediately, asynchronously write to L2.
+    // Insert completes when L1 succeeds.
+    // Faster inserts but L2 may be temporarily inconsistent.
+    WRITE_BACK = 1;
+  }
+
+  // Whether to populate L1 on L2 hits.
+  // When true, entries found in L2 but not L1 are copied to L1.
+  // Default: true
+  bool populate_l1_on_l2_hit = 4;
 }
