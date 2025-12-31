@@ -31,6 +31,9 @@ single-flight 패턴을 제공합니다.
   따라서 동일 키에 대해 워커 수만큼 in-flight 요청이 동시에 존재할 수 있습니다.
 - 동시 요청 테스트에서는 `--concurrency 2` 환경에서 동일 키로 8개 요청을 동시에 보내면
   `MISS` 2건과 `HIT-COALESCED` 6건이 관찰됩니다(워커마다 1개 upstream 요청).
+- 캐시 저장은 allowlist 기반으로 동작합니다(기본: GET/HEAD, 2xx).
+  응답에 `cache-control` 또는 `set-cookie`가 있으면 기본적으로 캐시하지 않습니다.
+- 응답 바디는 최대 1MB까지만 버퍼링하며, 초과하면 해당 응답은 캐시하지 않습니다.
 - 현재 구현은 응답 헤더의 캐시 TTL을 해석하지 않고 `default_ttl`을 사용합니다.
   - 라우트별 override로 `default_ttl`을 다르게 설정할 수 있습니다.
 
@@ -54,6 +57,18 @@ single-flight 패턴을 제공합니다.
 - `cache_key`
   - 설명: 캐시 키 구성(스킴/호스트/경로/쿼리/헤더)
   - 기본값: method + host + path (+ query)
+- `skip_if_response_has_cache_control`
+  - 설명: 응답에 `cache-control` 헤더가 있으면 캐시 저장을 건너뛸지 여부
+  - 기본값: true
+- `skip_if_response_has_set_cookie`
+  - 설명: 응답에 `set-cookie` 헤더가 있으면 캐시 저장을 건너뛸지 여부
+  - 기본값: true
+- `allowed_methods`
+  - 설명: 캐시를 허용할 요청 메서드 allowlist
+  - 기본값: GET, HEAD
+- `allowed_status_codes`
+  - 설명: 캐시를 허용할 응답 상태 코드 allowlist
+  - 기본값: 200~299
 
 ### CacheKeyConfig
 

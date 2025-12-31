@@ -2,6 +2,7 @@
 #include "source/extensions/filters/http/global_cache/local_cache.h"
 
 #include <atomic>
+#include <string>
 #include <thread>
 
 #include "test/mocks/http/mocks.h"
@@ -322,6 +323,127 @@ TEST_F(GlobalCacheFilterTest, CacheKeyQueryParamAllowlist) {
       {":authority", "example.com"}};
   EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
             filter_->decodeHeaders(request_headers2, true));
+}
+
+TEST_F(GlobalCacheFilterTest, ResponseWithNoStoreIsNotCached) {
+  setupFilter();
+
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/no-store"}, {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{
+      {":status", "200"}, {"cache-control", "no-store"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(0, local_cache->size());
+  EXPECT_TRUE(response_headers.get(Http::LowerCaseString("x-cache")).empty());
+}
+
+TEST_F(GlobalCacheFilterTest, ResponseWithCacheControlIsCachedWhenSkipDisabled) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCache proto_config;
+  proto_config.mutable_skip_if_response_has_cache_control()->set_value(false);
+  setFilterConfig(proto_config);
+  setupFilter();
+
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/cache-control"}, {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{
+      {":status", "200"}, {"cache-control", "no-store"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(1, local_cache->size());
+  EXPECT_EQ("MISS",
+            response_headers.get(Http::LowerCaseString("x-cache"))[0]->value().getStringView());
+}
+
+TEST_F(GlobalCacheFilterTest, ResponseWithSetCookieIsNotCached) {
+  setupFilter();
+
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/set-cookie"}, {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{
+      {":status", "200"}, {"set-cookie", "session=abc"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(0, local_cache->size());
+  EXPECT_TRUE(response_headers.get(Http::LowerCaseString("x-cache")).empty());
+}
+
+TEST_F(GlobalCacheFilterTest, AllowedMethodsRestrictCaching) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCache proto_config;
+  proto_config.add_allowed_methods("POST");
+  setFilterConfig(proto_config);
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/method"}, {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(0, local_cache->size());
+}
+
+TEST_F(GlobalCacheFilterTest, AllowedMethodsAllowCaching) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCache proto_config;
+  proto_config.add_allowed_methods("POST");
+  setFilterConfig(proto_config);
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "POST"}, {":path", "/api/method"}, {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(1, local_cache->size());
+}
+
+TEST_F(GlobalCacheFilterTest, AllowedStatusCodesAllowCaching) {
+  envoy::extensions::filters::http::global_cache::v3::GlobalCache proto_config;
+  proto_config.add_allowed_status_codes(404);
+  setFilterConfig(proto_config);
+
+  setupFilter();
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/status"}, {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "404"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(1, local_cache->size());
+}
+
+TEST_F(GlobalCacheFilterTest, ResponseTooLargeIsNotCached) {
+  setupFilter();
+
+  Http::TestRequestHeaderMapImpl request_headers{
+      {":method", "GET"}, {":path", "/api/large"}, {":authority", "example.com"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers, true));
+
+  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, false));
+
+  std::string large_payload(GlobalCacheFilter::kMaxCachedResponseBytes + 1, 'a');
+  Buffer::OwnedImpl response_body(large_payload);
+  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_body, true));
+
+  auto local_cache = std::static_pointer_cast<LocalCache>(cache_backend_);
+  EXPECT_EQ(0, local_cache->size());
 }
 
 TEST_F(GlobalCacheFilterTest, InFlightRequestsAreThreadLocal) {

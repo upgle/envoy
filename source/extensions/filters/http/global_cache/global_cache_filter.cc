@@ -1,10 +1,13 @@
 #include "source/extensions/filters/http/global_cache/global_cache_filter.h"
 
 #include "source/common/buffer/buffer_impl.h"
+#include "source/common/http/headers.h"
 #include "source/common/http/header_map_impl.h"
 #include "source/common/http/utility.h"
 
 #include <atomic>
+
+#include "absl/strings/ascii.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -81,6 +84,36 @@ GlobalCacheFilterConfig::GlobalCacheFilterConfig(
   if (proto_config.has_cache_key()) {
     cache_key_config_ = makeCacheKeyConfig(proto_config.cache_key());
   }
+
+  if (proto_config.has_skip_if_response_has_cache_control()) {
+    skip_if_response_has_cache_control_ = proto_config.skip_if_response_has_cache_control().value();
+  }
+  if (proto_config.has_skip_if_response_has_set_cookie()) {
+    skip_if_response_has_set_cookie_ = proto_config.skip_if_response_has_set_cookie().value();
+  }
+
+  if (proto_config.allowed_methods().empty()) {
+    allowed_methods_.insert("GET");
+    allowed_methods_.insert("HEAD");
+  } else {
+    for (const auto& method : proto_config.allowed_methods()) {
+      std::string normalized_method = method;
+      absl::AsciiStrToUpper(&normalized_method);
+      if (!normalized_method.empty()) {
+        allowed_methods_.insert(std::move(normalized_method));
+      }
+    }
+  }
+
+  if (proto_config.allowed_status_codes().empty()) {
+    for (uint32_t status = 200; status < 300; ++status) {
+      allowed_status_codes_.insert(status);
+    }
+  } else {
+    for (const auto status : proto_config.allowed_status_codes()) {
+      allowed_status_codes_.insert(status);
+    }
+  }
 }
 
 GlobalCachePerRouteConfig::GlobalCachePerRouteConfig(
@@ -107,6 +140,35 @@ GlobalCachePerRouteConfig::GlobalCachePerRouteConfig(
 GlobalCacheFilter::GlobalCacheFilter(GlobalCacheFilterConfigSharedPtr config)
     : config_(std::move(config)), cache_backend_(config_->cacheBackend()),
       effective_default_ttl_(config_->defaultTtl()) {}
+
+bool GlobalCacheFilter::isCacheableRequest(const Http::RequestHeaderMap& headers) const {
+  if (!headers.Method()) {
+    return false;
+  }
+  const auto method = headers.Method()->value().getStringView();
+  std::string normalized_method(method);
+  absl::AsciiStrToUpper(&normalized_method);
+  return config_->allowedMethods().contains(normalized_method);
+}
+
+bool GlobalCacheFilter::isCacheableResponse(const Http::ResponseHeaderMap& headers) const {
+  const auto status = Http::Utility::getResponseStatus(headers);
+  if (!config_->allowedStatusCodes().contains(status)) {
+    return false;
+  }
+
+  if (config_->skipIfResponseHasSetCookie() &&
+      !headers.get(Http::Headers::get().SetCookie).empty()) {
+    return false;
+  }
+
+  if (config_->skipIfResponseHasCacheControl() &&
+      !headers.get(Http::CustomHeaders::get().CacheControl).empty()) {
+    return false;
+  }
+
+  return true;
+}
 
 std::string GlobalCacheFilter::generateCacheKey(const Http::RequestHeaderMap& headers) {
   std::string key;
@@ -251,6 +313,11 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
     return Http::FilterHeadersStatus::Continue;
   }
 
+  cacheable_request_ = isCacheableRequest(headers);
+  if (!cacheable_request_) {
+    return Http::FilterHeadersStatus::Continue;
+  }
+
   cache_key_ = generateCacheKey(headers);
 
   ENVOY_LOG(debug, "global_cache: checking cache for key: {}", cache_key_);
@@ -353,8 +420,22 @@ Http::FilterHeadersStatus GlobalCacheFilter::encodeHeaders(Http::ResponseHeaderM
     return Http::FilterHeadersStatus::Continue;
   }
 
+  if (!cacheable_request_) {
+    return Http::FilterHeadersStatus::Continue;
+  }
+
   // If we served from cache or waiting, this shouldn't be called
   if (state_ == FilterState::CacheHit || state_ == FilterState::WaitingForUpstream) {
+    return Http::FilterHeadersStatus::Continue;
+  }
+
+  cacheable_response_ = isCacheableResponse(headers);
+  if (!cacheable_response_) {
+    if (owns_in_flight_) {
+      notifyInFlightWaiters(in_flight_key_, nullptr);
+      owns_in_flight_ = false;
+    }
+    state_ = FilterState::CacheMiss;
     return Http::FilterHeadersStatus::Continue;
   }
 
@@ -405,6 +486,10 @@ Http::FilterDataStatus GlobalCacheFilter::encodeData(Buffer::Instance& data, boo
     return Http::FilterDataStatus::Continue;
   }
 
+  if (!cacheable_request_ || !cacheable_response_) {
+    return Http::FilterDataStatus::Continue;
+  }
+
   // If we served from cache or waiting, this shouldn't be called
   if (state_ == FilterState::CacheHit || state_ == FilterState::WaitingForUpstream) {
     return Http::FilterDataStatus::Continue;
@@ -413,6 +498,16 @@ Http::FilterDataStatus GlobalCacheFilter::encodeData(Buffer::Instance& data, boo
   // Buffer the response body (avoid toString() to reduce memory copies)
   uint64_t length = data.length();
   if (length > 0) {
+    if (buffered_body_.length() + length > kMaxCachedResponseBytes) {
+      cacheable_response_ = false;
+      buffered_body_.drain(buffered_body_.length());
+      response_headers_.reset();
+      if (owns_in_flight_) {
+        notifyInFlightWaiters(in_flight_key_, nullptr);
+        owns_in_flight_ = false;
+      }
+      return Http::FilterDataStatus::Continue;
+    }
     buffered_body_.add(data);
   }
 

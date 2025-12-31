@@ -57,6 +57,7 @@ void TieredCache::insert(const std::string& key, std::shared_ptr<CacheEntry> ent
       bool l2_done = false;
       bool l1_success = false;
       bool l2_success = false;
+      bool callback_called = false;
       std::mutex mutex;
     };
     auto completion_state = std::make_shared<CompletionState>();
@@ -68,7 +69,8 @@ void TieredCache::insert(const std::string& key, std::shared_ptr<CacheEntry> ent
       completion_state->l1_success = l1_success;
 
       // If both are done, invoke callback
-      if (completion_state->l2_done) {
+      if (completion_state->l2_done && !completion_state->callback_called) {
+        completion_state->callback_called = true;
         callback(completion_state->l1_success && completion_state->l2_success);
       }
     });
@@ -81,7 +83,8 @@ void TieredCache::insert(const std::string& key, std::shared_ptr<CacheEntry> ent
         completion_state->l2_success = l2_success;
 
         // If both are done, invoke callback
-        if (completion_state->l1_done) {
+        if (completion_state->l1_done && !completion_state->callback_called) {
+          completion_state->callback_called = true;
           callback(completion_state->l1_success && completion_state->l2_success);
         }
       });
@@ -90,7 +93,8 @@ void TieredCache::insert(const std::string& key, std::shared_ptr<CacheEntry> ent
       std::lock_guard<std::mutex> lock(completion_state->mutex);
       completion_state->l2_done = true;
       completion_state->l2_success = true;
-      if (completion_state->l1_done) {
+      if (completion_state->l1_done && !completion_state->callback_called) {
+        completion_state->callback_called = true;
         callback(completion_state->l1_success);
       }
     }

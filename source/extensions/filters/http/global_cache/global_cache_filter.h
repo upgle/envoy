@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -57,12 +58,22 @@ public:
   std::chrono::seconds defaultTtl() const { return default_ttl_; }
   CacheBackendSharedPtr cacheBackend() const { return cache_backend_; }
   const CacheKeyConfig& cacheKeyConfig() const { return cache_key_config_; }
+  const absl::flat_hash_set<std::string>& allowedMethods() const { return allowed_methods_; }
+  const absl::flat_hash_set<uint32_t>& allowedStatusCodes() const {
+    return allowed_status_codes_;
+  }
+  bool skipIfResponseHasCacheControl() const { return skip_if_response_has_cache_control_; }
+  bool skipIfResponseHasSetCookie() const { return skip_if_response_has_set_cookie_; }
 
 private:
   std::chrono::milliseconds single_flight_timeout_;
   std::chrono::seconds default_ttl_;
   CacheBackendSharedPtr cache_backend_;
   CacheKeyConfig cache_key_config_;
+  absl::flat_hash_set<std::string> allowed_methods_;
+  absl::flat_hash_set<uint32_t> allowed_status_codes_;
+  bool skip_if_response_has_cache_control_{true};
+  bool skip_if_response_has_set_cookie_{true};
 };
 
 using GlobalCacheFilterConfigSharedPtr = std::shared_ptr<GlobalCacheFilterConfig>;
@@ -93,6 +104,8 @@ public:
   // Allow test to access private members
   friend class GlobalCacheFilterTest;
 
+  static constexpr size_t kMaxCachedResponseBytes = 1024 * 1024;
+
   GlobalCacheFilter(GlobalCacheFilterConfigSharedPtr config);
 
   // Http::StreamDecoderFilter
@@ -121,6 +134,8 @@ private:
   };
 
   std::string generateCacheKey(const Http::RequestHeaderMap& headers);
+  bool isCacheableRequest(const Http::RequestHeaderMap& headers) const;
+  bool isCacheableResponse(const Http::ResponseHeaderMap& headers) const;
   void serveCachedResponse(const std::shared_ptr<CacheEntry>& entry, const std::string& cache_status);
   void onInFlightComplete(const std::shared_ptr<CacheEntry>& entry);
   void onSingleFlightTimeout();
@@ -144,6 +159,8 @@ private:
   std::chrono::seconds effective_default_ttl_;
   CacheKeyConfig effective_cache_key_config_;
   bool cache_enabled_{true};
+  bool cacheable_request_{true};
+  bool cacheable_response_{true};
 };
 
 } // namespace GlobalCache

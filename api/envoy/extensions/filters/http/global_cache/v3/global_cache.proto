@@ -48,6 +48,24 @@ message GlobalCache {
   // Cache key configuration.
   // When unset, defaults to method + host + path (including query parameters).
   CacheKeyConfig cache_key = 4;
+
+  // When true, skip caching any response that includes Cache-Control.
+  // Default: true
+  google.protobuf.BoolValue skip_if_response_has_cache_control = 5;
+
+  // When true, skip caching any response that includes Set-Cookie.
+  // Default: true
+  google.protobuf.BoolValue skip_if_response_has_set_cookie = 6;
+
+  // Allowlist of request methods that can be cached.
+  // When unset, defaults to GET and HEAD.
+  repeated string allowed_methods = 7
+      [(validate.rules).repeated = {items {string {min_len: 1 max_len: 32}}}];
+
+  // Allowlist of response status codes that can be cached.
+  // When unset, defaults to 2xx.
+  repeated uint32 allowed_status_codes = 8
+      [(validate.rules).repeated = {items {uint32 {gte: 100 lte: 599}}}];
 }
 
 // Cache key configuration for the global cache filter.
