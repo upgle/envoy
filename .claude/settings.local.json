@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      ".context directory",
+      "Bash(export PATH=\"$HOME/bin:$PATH\")",
+      "Bash(bazel build:*)",
+      "Bash(export LD_LIBRARY_PATH=\"$HOME/lib:$LD_LIBRARY_PATH\")",
+      "Bash(ls:*)",
+      "Bash(ENVOY_DOCKER_BUILD_DIR=/home/seonghyun/envoy-build ./ci/run_envoy_docker.sh:*)",
+      "Bash(tee:*)",
+      "Bash(xargs ls:*)",
+      "Bash(curl:*)",
+      "Bash(grep:*)",
+      "Bash(timeout 10 curl -v http://localhost:10000/)"
+    ]
+  },
+  "model": "opusplan"
+}
