@@ -70,6 +70,69 @@ single-flight 패턴을 제공합니다.
   - 설명: 캐시를 허용할 응답 상태 코드 allowlist
   - 기본값: 200~299
 
+## Redis Cluster (Envoy Cluster) Setup
+
+Redis Cluster를 Envoy upstream으로 사용할 경우, Redis 캐시 설정에서 cluster mode를
+활성화하고 Envoy 클러스터가 Redis 노드를 가리키도록 구성합니다.
+
+Redis cache backend (example from `test_redis_integration.yaml`):
+```yaml
+cache_backend:
+  redis:
+    cluster_name: redis_cluster
+    key_prefix: "envoy:test:"
+    op_timeout:
+      seconds: 1
+    enable_cluster_mode: true
+```
+
+Redis cluster definition (seed with your node addresses):
+```yaml
+- name: redis_cluster
+  connect_timeout: 1s
+  type: STATIC
+  lb_policy: MAGLEV
+  load_assignment:
+    cluster_name: redis_cluster
+    endpoints:
+    - lb_endpoints:
+      - endpoint:
+          address:
+            socket_address:
+              address: 127.0.0.1
+              port_value: 7000
+      - endpoint:
+          address:
+            socket_address:
+              address: 127.0.0.1
+              port_value: 7001
+      - endpoint:
+          address:
+            socket_address:
+              address: 127.0.0.1
+              port_value: 7002
+  health_checks:
+  - timeout: 1s
+    interval: 10s
+    unhealthy_threshold: 2
+    healthy_threshold: 2
+    custom_health_check:
+      name: envoy.health_checkers.redis
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.health_checkers.redis.v3.Redis
+```
+
+Notes:
+* `cluster_name` must match the Envoy cluster name.
+* `enable_cluster_mode: true` tells Envoy to use Redis Cluster slot discovery.
+* List enough nodes to cover your primaries (and replicas if you want read routing).
+
+See `test_redis_integration.yaml` and `test_redis_integration_per_route.yaml` for full examples.
+For a quick local check, `verify_global_cache.sh` supports Redis Cluster with:
+```bash
+REDIS_CLUSTER_MODE=true CONFIG_FILE=test_redis_integration.yaml ./verify_global_cache.sh
+```
+
 ### CacheKeyConfig
 
 - `include_scheme`
