@@ -50,6 +50,38 @@ single-flight 패턴을 제공합니다.
   - 설명: 캐시 키 구성(스킴/호스트/경로/쿼리/헤더)
   - 기본값: method + host + path (+ query)
 
+### CacheKeyConfig
+
+- `include_scheme`
+  - 설명: 캐시 키에 URL scheme 포함 여부 (`http`/`https`)
+  - 기본값: false
+- `include_host`
+  - 설명: 캐시 키에 호스트/authority 포함 여부
+  - 기본값: true
+- `include_path`
+  - 설명: 캐시 키에 경로 포함 여부
+  - 기본값: true
+- `include_query_params`
+  - 설명: 캐시 키에 쿼리 파라미터 포함 여부
+  - 기본값: true
+  - 참고: false이면 경로에서 쿼리를 제거하며, `query_params_included`/`query_params_excluded`는 무시됩니다.
+- `query_params_included`
+  - 설명: 지정된 이름의 쿼리만 포함(allowlist)
+  - 기본값: 비어 있음(전체 포함)
+- `query_params_excluded`
+  - 설명: 지정된 이름의 쿼리를 제외(blocklist)
+  - 기본값: 비어 있음
+  - 참고: `query_params_included`가 설정되어 있어도 `query_params_excluded`가 우선 적용됩니다.
+- `headers_included`
+  - 설명: 캐시 키에 포함할 요청 헤더 이름 목록
+  - 기본값: 비어 있음
+  - 참고: 동일 헤더의 다중 값은 `,`로 연결됩니다.
+
+쿼리 파라미터 처리 규칙:
+- `include_query_params`가 true이고 `query_params_included`/`query_params_excluded`가 비어 있으면 원본 쿼리를 그대로 사용합니다.
+- `query_params_included`가 비어 있지 않으면 allowlist로 동작합니다.
+- `query_params_excluded`에 있는 이름은 항상 제외됩니다.
+
 ### CacheBackendConfig.local (LocalCacheConfig)
 
 - `max_entries`
@@ -174,6 +206,11 @@ route_config:
           overrides:
             default_ttl: { seconds: 30 }
             include_query_params: { value: false }
+```
+
+참고:
+- `overrides.include_query_params`는 레거시 옵션으로, `overrides.cache_key`가 없을 때만 적용됩니다.
+- `overrides.cache_key`가 설정되면 해당 라우트에서는 필터 레벨 `cache_key`를 완전히 대체합니다.
 
 ### 캐시 키 커스터마이즈
 
@@ -197,4 +234,41 @@ typed_per_filter_config:
         include_query_params: { value: false }
         headers_included: ["x-device"]
 ```
+
+### 쿼리 필터링 예시 (allowlist/blocklist)
+
+```yaml
+# allowlist: user_id, region만 포함
+cache_key:
+  include_query_params: { value: true }
+  query_params_included: ["user_id", "region"]
+```
+
+```yaml
+# blocklist: utm_source, debug는 제외
+cache_key:
+  include_query_params: { value: true }
+  query_params_excluded: ["utm_source", "debug"]
+```
+
+### 라우트별 예시 (legacy vs cache_key)
+
+```yaml
+# legacy include_query_params: cache_key가 없을 때만 적용
+typed_per_filter_config:
+  envoy.filters.http.global_cache:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
+    overrides:
+      include_query_params: { value: false }
+```
+
+```yaml
+# cache_key가 설정되면 전역 cache_key를 완전히 대체
+typed_per_filter_config:
+  envoy.filters.http.global_cache:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCachePerRoute
+    overrides:
+      cache_key:
+        include_query_params: { value: true }
+        query_params_included: ["user_id"]
 ```

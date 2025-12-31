@@ -25,3 +25,6 @@ Envoy는 Go의 goroutine 기반 서버와 다르게 **이벤트 루프 기반**�
 - 캐시 활성화/비활성화
 - `default_ttl` (캐시 저장 TTL)
 - 캐시 키 구성(`cache_key`) 및 쿼리 포함 여부(legacy `include_query_params`)
+
+`cache_key`의 세부 옵션(`include_scheme`, `include_query_params` 등)은
+`docs/09_configuration_and_factory.md`의 CacheKeyConfig 섹션을 참고합니다.
