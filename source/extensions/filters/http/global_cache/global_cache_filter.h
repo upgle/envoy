@@ -1,7 +1,6 @@
 #pragma once
 
 #include <chrono>
-#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -9,6 +8,7 @@
 #include <vector>
 
 #include "envoy/buffer/buffer.h"
+#include "envoy/event/dispatcher.h"
 #include "envoy/extensions/filters/http/global_cache/v3/global_cache.pb.h"
 #include "envoy/http/header_map.h"
 
@@ -26,9 +26,9 @@ namespace GlobalCache {
  * Uses single-flight pattern: first request goes upstream, subsequent requests wait.
  */
 struct InFlightRequest {
-  std::condition_variable cv;
   bool completed{false};
   std::shared_ptr<CacheEntry> result{nullptr};
+  std::vector<std::weak_ptr<class GlobalCacheFilter>> waiters;
 };
 
 /**
@@ -57,6 +57,7 @@ using GlobalCacheFilterConfigSharedPtr = std::shared_ptr<GlobalCacheFilterConfig
  * Supports local LRU cache, Redis, and tiered caching.
  */
 class GlobalCacheFilter : public Http::PassThroughFilter,
+                          public std::enable_shared_from_this<GlobalCacheFilter>,
                           public Logger::Loggable<Logger::Id::filter> {
 public:
   // Allow test to access private members
@@ -68,6 +69,7 @@ public:
   Http::FilterHeadersStatus decodeHeaders(Http::RequestHeaderMap& headers,
                                           bool end_stream) override;
   Http::FilterDataStatus decodeData(Buffer::Instance& data, bool end_stream) override;
+  void onDestroy() override;
 
   // Http::StreamEncoderFilter
   Http::FilterHeadersStatus encodeHeaders(Http::ResponseHeaderMap& headers,
@@ -90,6 +92,10 @@ private:
 
   std::string generateCacheKey(const Http::RequestHeaderMap& headers);
   void serveCachedResponse(const std::shared_ptr<CacheEntry>& entry, const std::string& cache_status);
+  void onInFlightComplete(const std::shared_ptr<CacheEntry>& entry);
+  void onSingleFlightTimeout();
+  static void notifyInFlightWaiters(const std::string& key,
+                                    const std::shared_ptr<CacheEntry>& entry);
 
   GlobalCacheFilterConfigSharedPtr config_;
   CacheBackendSharedPtr cache_backend_;
@@ -98,6 +104,10 @@ private:
   Buffer::OwnedImpl buffered_body_;
   Http::ResponseHeaderMapPtr response_headers_{nullptr};
   FilterState state_{FilterState::Initial};
+  Event::TimerPtr single_flight_timer_{nullptr};
+  bool waiting_for_in_flight_{false};
+  bool owns_in_flight_{false};
+  std::string in_flight_key_;
 };
 
 } // namespace GlobalCache

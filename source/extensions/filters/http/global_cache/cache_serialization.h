@@ -14,14 +14,15 @@ namespace GlobalCache {
  * Utility for serializing and deserializing CacheEntry objects.
  *
  * Binary format:
- * [8 bytes: expiration_time_ms (uint64_t)]
+ * [4 bytes: magic "GC01" (uint32_t)]
+ * [8 bytes: remaining_ttl_ms (uint64_t)]
  * [4 bytes: num_headers (uint32_t)]
  * [for each header:]
  *   [4 bytes: key_length (uint32_t)]
  *   [key_length bytes: key data]
  *   [4 bytes: value_length (uint32_t)]
  *   [value_length bytes: value data]
- * [4 bytes: body_length (uint32_t)]
+ * [8 bytes: body_length (uint64_t)]
  * [body_length bytes: body data]
  */
 class CacheSerializer {

@@ -64,6 +64,7 @@ void LocalCache::lookup(const std::string& key, LookupCallback callback) {
 void LocalCache::insert(const std::string& key, std::shared_ptr<CacheEntry> entry,
                         std::chrono::seconds ttl, InsertCallback callback) {
   bool success = true;
+  (void)ttl;
 
   {
     absl::MutexLock lock(&mutex_);
@@ -84,14 +85,13 @@ void LocalCache::insert(const std::string& key, std::shared_ptr<CacheEntry> entr
         current_bytes_ -= existing_node->size_bytes;
 
         existing_node->entry = entry;
-        existing_node->ttl = ttl;
         existing_node->size_bytes = entry_size;
 
         current_bytes_ += entry_size;
         moveToFront(existing_node);
       } else {
         // Create new node
-        auto new_node = std::make_unique<LruNode>(key, entry, ttl, entry_size);
+        auto new_node = std::make_unique<LruNode>(key, entry, entry_size);
         LruNode* node_ptr = new_node.get();
 
         // Insert into hash map

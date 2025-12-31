@@ -4,6 +4,8 @@
 #include "source/common/http/header_map_impl.h"
 #include "source/common/http/utility.h"
 
+#include <atomic>
+
 namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
@@ -92,12 +94,16 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
 
   ENVOY_LOG(debug, "global_cache: checking cache for key: {}", cache_key_);
 
-  // Track if callback was invoked synchronously
-  bool callback_invoked = false;
+  struct LookupContext {
+    std::atomic<bool> sync{true};
+    std::atomic<bool> invoked{false};
+  };
+  auto lookup_ctx = std::make_shared<LookupContext>();
 
   // Perform async cache lookup
-  cache_backend_->lookup(cache_key_, [this, &callback_invoked](CacheLookupResult&& result) {
-    callback_invoked = true;
+  cache_backend_->lookup(cache_key_, [this, lookup_ctx](CacheLookupResult&& result) {
+    lookup_ctx->invoked.store(true);
+    const bool is_sync = lookup_ctx->sync.load();
 
     if (result.status == CacheLookupStatus::Hit) {
       // Cache hit - serve immediately
@@ -107,7 +113,6 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
     }
 
     // Cache miss - check single-flight pattern
-    std::shared_ptr<InFlightRequest> in_flight;
     bool is_first_request = false;
 
     {
@@ -116,64 +121,47 @@ Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(Http::RequestHeaderMa
 
       if (it != in_flight_requests_.end()) {
         // Another request is already in progress for this key - wait for it
-        in_flight = it->second;
+        std::weak_ptr<GlobalCacheFilter> weak_self = shared_from_this();
+        it->second->waiters.push_back(std::move(weak_self));
         ENVOY_LOG(info, "global_cache: WAITING for in-flight request for key: {}", cache_key_);
         state_ = FilterState::WaitingForUpstream;
+        waiting_for_in_flight_ = true;
+
+        if (!single_flight_timer_) {
+          std::weak_ptr<GlobalCacheFilter> weak_self = shared_from_this();
+          single_flight_timer_ = decoder_callbacks_->dispatcher().createTimer([weak_self]() {
+            if (auto self = weak_self.lock()) {
+              self->onSingleFlightTimeout();
+            }
+          });
+        }
+        single_flight_timer_->enableTimer(config_->singleFlightTimeout());
       } else {
         // This is the first request for this key - create in-flight tracker
-        in_flight = std::make_shared<InFlightRequest>();
-        in_flight_requests_[cache_key_] = in_flight;
+        in_flight_requests_[cache_key_] = std::make_shared<InFlightRequest>();
         is_first_request = true;
+        owns_in_flight_ = true;
+        in_flight_key_ = cache_key_;
         ENVOY_LOG(info, "global_cache: cache MISS for key: {} - sending to upstream", cache_key_);
         state_ = FilterState::CacheMiss;
       }
     }
 
     if (!is_first_request) {
-      // Wait for the first request to complete with timeout
-      std::unique_lock<std::mutex> lock(in_flight_mutex_);
-      auto timeout = config_->singleFlightTimeout();
-      bool completed =
-          in_flight->cv.wait_for(lock, timeout, [&in_flight] { return in_flight->completed; });
-
-      if (!completed) {
-        // Timeout occurred - proceed to upstream independently
-        ENVOY_LOG(warn,
-                  "global_cache: timeout waiting for in-flight request for key: {} - proceeding "
-                  "to upstream",
-                  cache_key_);
-        state_ = FilterState::CacheMiss;
-        decoder_callbacks_->continueDecoding();
-        return;
-      }
-
-      // The first request has completed - use its result
-      if (in_flight->result) {
-        ENVOY_LOG(info,
-                  "global_cache: in-flight request completed for key: {} - serving cached response",
-                  cache_key_);
-        serveCachedResponse(in_flight->result, "HIT-COALESCED");
-        return;
-      } else {
-        // First request failed or had no cacheable response - proceed to upstream
-        ENVOY_LOG(info,
-                  "global_cache: in-flight request failed for key: {} - proceeding to upstream",
-                  cache_key_);
-        state_ = FilterState::CacheMiss;
-        decoder_callbacks_->continueDecoding();
-        return;
-      }
+      // Waiting requests will be resumed when the first request completes or times out.
+      return;
     }
 
     // This is the first request for a cache miss
     // For async backends, continueDecoding() is needed
-    if (state_ == FilterState::CacheMiss) {
+    if (!is_sync && state_ == FilterState::CacheMiss) {
       decoder_callbacks_->continueDecoding();
     }
   });
+  lookup_ctx->sync.store(false);
 
   // Check if callback was invoked synchronously (LocalCache)
-  if (callback_invoked) {
+  if (lookup_ctx->invoked.load()) {
     // Synchronous callback - state is already set
     if (state_ == FilterState::CacheHit || state_ == FilterState::WaitingForUpstream) {
       return Http::FilterHeadersStatus::StopAllIterationAndWatermark;
@@ -224,26 +212,17 @@ Http::FilterHeadersStatus GlobalCacheFilter::encodeHeaders(Http::ResponseHeaderM
 
     // Insert into cache backend
     cache_backend_->insert(cache_key_, cached_entry, config_->defaultTtl(),
-                           [this, cached_entry](bool success) {
+                           [cache_key = cache_key_, cached_entry](bool success) {
                              if (success) {
-                               ENVOY_LOG(info, "global_cache: cached empty response for key: {}",
-                                         cache_key_);
-
-                               // Notify waiting requests (single-flight pattern)
-                               std::unique_lock<std::mutex> lock(in_flight_mutex_);
-                               auto it = in_flight_requests_.find(cache_key_);
-                               if (it != in_flight_requests_.end()) {
-                                 it->second->result = cached_entry;
-                                 it->second->completed = true;
-                                 it->second->cv.notify_all();
-                                 in_flight_requests_.erase(it);
-                                 ENVOY_LOG(debug,
-                                           "global_cache: notified waiting requests for key: {}",
-                                           cache_key_);
-                               }
+                               ENVOY_LOG_MISC(info,
+                                              "global_cache: cached empty response for key: {}",
+                                              cache_key);
+                               notifyInFlightWaiters(cache_key, cached_entry);
                              } else {
-                               ENVOY_LOG(warn, "global_cache: failed to cache entry for key: {}",
-                                         cache_key_);
+                               ENVOY_LOG_MISC(warn,
+                                              "global_cache: failed to cache entry for key: {}",
+                                              cache_key);
+                               notifyInFlightWaiters(cache_key, nullptr);
                              }
                            });
   }
@@ -280,27 +259,84 @@ Http::FilterDataStatus GlobalCacheFilter::encodeData(Buffer::Instance& data, boo
                              if (success) {
                                ENVOY_LOG(info, "global_cache: cached response ({} bytes) for key: {}",
                                          cached_entry->body.length(), cache_key_copy);
-
-                               // Notify waiting requests (single-flight pattern)
-                               std::unique_lock<std::mutex> lock(in_flight_mutex_);
-                               auto it = in_flight_requests_.find(cache_key_copy);
-                               if (it != in_flight_requests_.end()) {
-                                 it->second->result = cached_entry;
-                                 it->second->completed = true;
-                                 it->second->cv.notify_all();
-                                 in_flight_requests_.erase(it);
-                                 ENVOY_LOG(debug,
-                                           "global_cache: notified waiting requests for key: {}",
-                                           cache_key_copy);
-                               }
+                               notifyInFlightWaiters(cache_key_copy, cached_entry);
                              } else {
                                ENVOY_LOG(warn, "global_cache: failed to cache entry for key: {}",
                                          cache_key_copy);
+                               notifyInFlightWaiters(cache_key_copy, nullptr);
                              }
                            });
   }
 
   return Http::FilterDataStatus::Continue;
+}
+
+void GlobalCacheFilter::onDestroy() {
+  if (single_flight_timer_) {
+    single_flight_timer_->disableTimer();
+  }
+  waiting_for_in_flight_ = false;
+
+  if (owns_in_flight_) {
+    notifyInFlightWaiters(in_flight_key_, nullptr);
+    owns_in_flight_ = false;
+  }
+}
+
+void GlobalCacheFilter::onInFlightComplete(const std::shared_ptr<CacheEntry>& entry) {
+  if (!waiting_for_in_flight_ || state_ != FilterState::WaitingForUpstream) {
+    return;
+  }
+
+  waiting_for_in_flight_ = false;
+  if (single_flight_timer_) {
+    single_flight_timer_->disableTimer();
+  }
+
+  if (entry) {
+    state_ = FilterState::CacheHit;
+    serveCachedResponse(entry, "HIT-COALESCED");
+  } else {
+    state_ = FilterState::CacheMiss;
+    decoder_callbacks_->continueDecoding();
+  }
+}
+
+void GlobalCacheFilter::onSingleFlightTimeout() {
+  if (!waiting_for_in_flight_ || state_ != FilterState::WaitingForUpstream) {
+    return;
+  }
+
+  ENVOY_LOG(warn,
+            "global_cache: timeout waiting for in-flight request for key: {} - proceeding to upstream",
+            cache_key_);
+  waiting_for_in_flight_ = false;
+  state_ = FilterState::CacheMiss;
+  decoder_callbacks_->continueDecoding();
+}
+
+void GlobalCacheFilter::notifyInFlightWaiters(const std::string& key,
+                                              const std::shared_ptr<CacheEntry>& entry) {
+  std::vector<std::shared_ptr<GlobalCacheFilter>> waiters;
+  {
+    std::unique_lock<std::mutex> lock(in_flight_mutex_);
+    auto it = in_flight_requests_.find(key);
+    if (it == in_flight_requests_.end()) {
+      return;
+    }
+    it->second->completed = true;
+    it->second->result = entry;
+    for (const auto& waiter : it->second->waiters) {
+      if (auto filter = waiter.lock()) {
+        waiters.push_back(filter);
+      }
+    }
+    in_flight_requests_.erase(it);
+  }
+
+  for (const auto& waiter : waiters) {
+    waiter->onInFlightComplete(entry);
+  }
 }
 
 } // namespace GlobalCache

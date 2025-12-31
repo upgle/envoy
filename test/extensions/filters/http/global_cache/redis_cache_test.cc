@@ -2,11 +2,13 @@
 #include "source/extensions/filters/http/global_cache/cache_serialization.h"
 
 #include "test/mocks/event/mocks.h"
+#include "test/mocks/server/server_factory_context.h"
 #include "test/mocks/stats/mocks.h"
 #include "test/mocks/thread_local/mocks.h"
 #include "test/mocks/upstream/cluster_manager.h"
 #include "test/test_common/utility.h"
 
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace Envoy {
@@ -24,14 +26,12 @@ public:
     proto_config_.mutable_op_timeout()->set_seconds(1);
     proto_config_.set_enable_cluster_mode(true);
 
-    // Setup TLS expectation
-    EXPECT_CALL(tls_, allocateSlot()).WillOnce(Invoke([] {
-      return std::make_unique<NiceMock<ThreadLocal::MockSlot>>();
-    }));
+    server_context_.thread_local_.setDispatcher(&dispatcher_);
 
     // Create RedisCache instance
-    redis_cache_ =
-        std::make_shared<RedisCache>(proto_config_, cluster_manager_, tls_, stats_scope_);
+    redis_cache_ = std::make_shared<RedisCache>(
+        proto_config_, server_context_.cluster_manager_, server_context_.thread_local_,
+        server_context_, server_context_.scope());
   }
 
 protected:
@@ -44,11 +44,8 @@ protected:
   }
 
   envoy::extensions::filters::http::global_cache::v3::RedisCacheConfig proto_config_;
-  NiceMock<Upstream::MockClusterManager> cluster_manager_;
   NiceMock<Event::MockDispatcher> dispatcher_;
-  NiceMock<ThreadLocal::MockInstance> tls_;
-  NiceMock<Stats::MockIsolatedStatsStore> stats_store_;
-  Stats::Scope& stats_scope_{*stats_store_.rootScope()};
+  NiceMock<Server::Configuration::MockServerFactoryContext> server_context_;
   std::shared_ptr<RedisCache> redis_cache_;
 };
 
@@ -124,12 +121,9 @@ TEST_F(RedisCacheTest, CustomConfiguration) {
   custom_config.mutable_op_timeout()->set_seconds(5);
   custom_config.set_enable_cluster_mode(false);
 
-  EXPECT_CALL(tls_, allocateSlot()).WillOnce(Invoke([] {
-    return std::make_unique<NiceMock<ThreadLocal::MockSlot>>();
-  }));
-
-  auto custom_cache =
-      std::make_shared<RedisCache>(custom_config, cluster_manager_, tls_, stats_scope_);
+  auto custom_cache = std::make_shared<RedisCache>(
+      custom_config, server_context_.cluster_manager_, server_context_.thread_local_,
+      server_context_, server_context_.scope());
   EXPECT_NE(nullptr, custom_cache);
 }
 
@@ -139,12 +133,9 @@ TEST_F(RedisCacheTest, DefaultConfiguration) {
   default_config.set_cluster_name("default_cluster");
   // Don't set prefix or timeout - should use defaults
 
-  EXPECT_CALL(tls_, allocateSlot()).WillOnce(Invoke([] {
-    return std::make_unique<NiceMock<ThreadLocal::MockSlot>>();
-  }));
-
-  auto default_cache =
-      std::make_shared<RedisCache>(default_config, cluster_manager_, tls_, stats_scope_);
+  auto default_cache = std::make_shared<RedisCache>(
+      default_config, server_context_.cluster_manager_, server_context_.thread_local_,
+      server_context_, server_context_.scope());
   EXPECT_NE(nullptr, default_cache);
 }
 

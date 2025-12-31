@@ -22,14 +22,13 @@ namespace GlobalCache {
 struct LruNode {
   std::string key;
   std::shared_ptr<CacheEntry> entry;
-  std::chrono::seconds ttl;
 
   LruNode* prev{nullptr};
   LruNode* next{nullptr};
   size_t size_bytes{0};  // Estimated memory footprint
 
-  LruNode(std::string k, std::shared_ptr<CacheEntry> e, std::chrono::seconds t, size_t size)
-      : key(std::move(k)), entry(std::move(e)), ttl(t), size_bytes(size) {}
+  LruNode(std::string k, std::shared_ptr<CacheEntry> e, size_t size)
+      : key(std::move(k)), entry(std::move(e)), size_bytes(size) {}
 };
 
 /**

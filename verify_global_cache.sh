@@ -35,10 +35,17 @@ fi
 echo "Clearing Redis keys for test prefix..."
 REDIS_CONTAINER=${REDIS_CONTAINER:-redis-standalone}
 REDIS_KEY_PREFIX=${REDIS_KEY_PREFIX:-envoy:test:}
+REDIS_PORT=${REDIS_PORT:-6379}
+REDIS_CLUSTER_MODE=${REDIS_CLUSTER_MODE:-false}
+REDIS_CLI_ARGS=()
+if [[ "${REDIS_CLUSTER_MODE}" == "true" ]]; then
+    REDIS_CLI_ARGS+=("-c")
+fi
+REDIS_CLI_ARGS+=("-p" "${REDIS_PORT}")
 if command -v docker >/dev/null 2>&1; then
     if docker ps --format '{{.Names}}' | grep -q "^${REDIS_CONTAINER}\$"; then
         docker exec "$REDIS_CONTAINER" sh -c \
-            "redis-cli --scan --pattern '${REDIS_KEY_PREFIX}*' | xargs -r redis-cli del" >/dev/null
+            "redis-cli ${REDIS_CLI_ARGS[*]} --scan --pattern '${REDIS_KEY_PREFIX}*' | xargs -r redis-cli ${REDIS_CLI_ARGS[*]} del" >/dev/null
     else
         echo "Redis container '${REDIS_CONTAINER}' not running; skipping key cleanup."
     fi
@@ -91,7 +98,7 @@ echo "----------------------------------------------------------------"
 REDIS_CONTAINER=${REDIS_CONTAINER:-redis-standalone}
 if command -v docker >/dev/null 2>&1; then
     if docker ps --format '{{.Names}}' | grep -q "^${REDIS_CONTAINER}\$"; then
-        docker exec "$REDIS_CONTAINER" redis-cli --scan --pattern "envoy:test:*" | head -20
+        docker exec "$REDIS_CONTAINER" redis-cli ${REDIS_CLI_ARGS[*]} --scan --pattern "envoy:test:*" | head -20
     else
         echo "Redis container '${REDIS_CONTAINER}' not running; skipping key check."
     fi

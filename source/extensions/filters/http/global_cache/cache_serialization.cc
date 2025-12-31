@@ -9,15 +9,22 @@ namespace Extensions {
 namespace HttpFilters {
 namespace GlobalCache {
 
+namespace {
+constexpr uint32_t kSerializationMagic = 0x47433031; // "GC01"
+} // namespace
+
 std::string CacheSerializer::serialize(const CacheEntry& entry) {
   std::string buffer;
   buffer.reserve(1024); // Reserve some space to avoid multiple allocations
 
-  // 1. Write expiration time (milliseconds since epoch)
-  auto expiration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           entry.expiration_time.time_since_epoch())
-                           .count();
-  writeUint64(buffer, static_cast<uint64_t>(expiration_ms));
+  // 1. Write format magic and remaining TTL
+  writeUint32(buffer, kSerializationMagic);
+  auto now = std::chrono::steady_clock::now();
+  auto remaining = entry.expiration_time > now ? entry.expiration_time - now
+                                               : std::chrono::steady_clock::duration::zero();
+  auto remaining_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
+  writeUint64(buffer, static_cast<uint64_t>(remaining_ms));
 
   // 2. Count headers
   uint32_t num_headers = 0;
@@ -46,7 +53,7 @@ std::string CacheSerializer::serialize(const CacheEntry& entry) {
 
   // 4. Write body
   uint64_t body_length = entry.body.length();
-  writeUint32(buffer, static_cast<uint32_t>(body_length));
+  writeUint64(buffer, body_length);
 
   if (body_length > 0) {
     // Copy body data
@@ -62,13 +69,17 @@ std::shared_ptr<CacheEntry> CacheSerializer::deserialize(const std::string& data
   size_t offset = 0;
 
   try {
-    // 1. Read expiration time
-    if (data.size() < 8) {
+    // 1. Read format magic and remaining TTL
+    if (data.size() < 12) {
       return nullptr;
     }
-    uint64_t expiration_ms = readUint64(data, offset);
-    auto expiration_time = std::chrono::steady_clock::time_point(
-        std::chrono::milliseconds(expiration_ms));
+    uint32_t magic = readUint32(data, offset);
+    if (magic != kSerializationMagic) {
+      return nullptr;
+    }
+    uint64_t remaining_ms = readUint64(data, offset);
+    auto expiration_time =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(remaining_ms);
 
     // 2. Read number of headers
     if (offset + 4 > data.size()) {
@@ -106,11 +117,11 @@ std::shared_ptr<CacheEntry> CacheSerializer::deserialize(const std::string& data
     }
 
     // 4. Read body
-    if (offset + 4 > data.size()) {
+    if (offset + 8 > data.size()) {
       return nullptr;
     }
-    uint32_t body_length = readUint32(data, offset);
-    if (offset + body_length > data.size()) {
+    uint64_t body_length = readUint64(data, offset);
+    if (body_length > data.size() - offset) {
       return nullptr;
     }
 
