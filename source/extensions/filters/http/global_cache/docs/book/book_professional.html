@@ -1,0 +1,1713 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Envoy Global Cache Filter 구현 가이드</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: false, theme: 'neutral', fontFamily: 'inherit' });
+        window.mermaid = mermaid;
+    </script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/atom-one-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11"></script>
+    <style>
+        :root {
+            --primary: #d11242;
+            --primary-light: #ff4d6a;
+            --primary-dark: #a00d33;
+            --text: #2d3748;
+            --text-light: #718096;
+            --bg: #ffffff;
+            --bg-alt: #f7fafc;
+            --bg-code: #1a202c;
+            --border: #e2e8f0;
+            --sidebar-width: 300px;
+            --content-max: 900px;
+        }
+        
+        * { box-sizing: border-box; }
+        
+        body {
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+            line-height: 1.8;
+            color: var(--text);
+            margin: 0;
+            background: var(--bg);
+        }
+        
+        /* Sidebar */
+        #sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: var(--sidebar-width);
+            height: 100vh;
+            background: var(--bg);
+            border-right: 1px solid var(--border);
+            overflow-y: auto;
+            padding: 20px;
+            z-index: 100;
+        }
+        
+        #sidebar h1 {
+            font-size: 1rem;
+            color: var(--primary);
+            margin: 0 0 4px 0;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--primary);
+        }
+        
+        #sidebar .subtitle {
+            font-size: 0.75rem;
+            color: var(--text-light);
+            margin-bottom: 20px;
+        }
+        
+        .toc-part {
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--text-light);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 16px 0 6px 0;
+        }
+        
+        .toc-item {
+            display: block;
+            padding: 6px 10px;
+            margin: 2px 0;
+            text-decoration: none;
+            color: var(--text);
+            font-size: 0.8rem;
+            border-radius: 4px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        
+        .toc-item:hover { background: var(--bg-alt); color: var(--primary); }
+        .toc-item.active {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+            font-weight: 600;
+        }
+        
+        /* Main Content */
+        #main {
+            margin-left: var(--sidebar-width);
+            padding: 40px 60px;
+            max-width: calc(var(--content-max) + var(--sidebar-width) + 120px);
+        }
+        
+        .chapter { display: none; }
+        .chapter.active { display: block; }
+        
+        /* Typography */
+        #main h1 { font-size: 2rem; font-weight: 800; margin: 0 0 20px 0; line-height: 1.3; color: var(--primary-dark); }
+        #main h1::before {
+            content: '';
+            display: block;
+            width: 50px;
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary), var(--primary-light));
+            margin-bottom: 12px;
+            border-radius: 2px;
+        }
+        
+        #main h2 { font-size: 1.4rem; font-weight: 700; margin: 40px 0 16px 0; padding-bottom: 8px; border-bottom: 1px solid var(--border); color: var(--text); }
+        #main h3 { font-size: 1.15rem; font-weight: 600; margin: 30px 0 12px 0; color: var(--text); }
+        #main h4 { font-size: 1rem; font-weight: 600; margin: 24px 0 10px 0; color: var(--text-light); }
+        #main p { margin: 0 0 16px 0; }
+        
+        #main blockquote {
+            margin: 24px 0;
+            padding: 16px 24px;
+            background: linear-gradient(135deg, #fff5f7 0%, #ffe4e9 100%);
+            border-left: 4px solid var(--primary);
+            border-radius: 0 8px 8px 0;
+            font-style: italic;
+        }
+        #main blockquote strong { color: var(--primary); font-style: normal; }
+        #main blockquote p { margin: 0; }
+        
+        /* Code */
+        #main code {
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.88em;
+            background: var(--bg-alt);
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: var(--primary-dark);
+        }
+        
+        #main pre {
+            background: var(--bg-code);
+            color: #e2e8f0;
+            padding: 20px 24px;
+            border-radius: 12px;
+            overflow-x: auto;
+            margin: 24px 0;
+            font-size: 0.88rem;
+            line-height: 1.6;
+        }
+        #main pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+        
+        /* Tables */
+        #main table { width: 100%; border-collapse: collapse; margin: 24px 0; font-size: 0.9rem; }
+        #main th, #main td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+        #main th { background: var(--bg-alt); font-weight: 600; }
+        #main tr:hover { background: var(--bg-alt); }
+        
+        /* Lists */
+        #main ul, #main ol { margin: 0 0 16px 0; padding-left: 28px; }
+        #main li { margin-bottom: 8px; }
+        #main li > ul, #main li > ol { margin-top: 8px; margin-bottom: 0; }
+        
+        /* Mermaid */
+        .mermaid { margin: 28px 0; text-align: center; background: var(--bg-alt); padding: 20px; border-radius: 8px; }
+        
+        /* Checklist Box */
+        .checklist-box {
+            background: var(--bg-alt);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px 24px;
+            margin: 32px 0;
+        }
+        .checklist-box h4 {
+            margin: 0 0 12px 0;
+            color: var(--primary);
+        }
+        
+        /* HR styling */
+        #main hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 40px 0;
+        }
+        
+        /* Navigation */
+        .nav-buttons {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 48px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+        }
+        .nav-btn {
+            padding: 12px 24px;
+            background: var(--bg-alt);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            text-decoration: none;
+            color: var(--text);
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .nav-btn:hover { background: var(--primary); color: white; border-color: var(--primary); }
+        .nav-btn.disabled { opacity: 0.4; pointer-events: none; }
+        
+        /* Mobile Toggle */
+        #menu-toggle {
+            display: none;
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            z-index: 200;
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        
+        /* Mobile */
+        @media (max-width: 900px) {
+            #menu-toggle { display: block; }
+            #sidebar { transform: translateX(-100%); transition: transform 0.3s; }
+            #sidebar.open { transform: translateX(0); }
+            #main { margin-left: 0; padding: 80px 20px 40px; }
+        }
+        
+        /* Print */
+        @media print {
+            #sidebar, #menu-toggle { display: none; }
+            #main { margin-left: 0; max-width: 100%; }
+            .chapter { display: block !important; page-break-before: always; }
+            .nav-buttons { display: none; }
+        }
+        
+        /* Loading */
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            font-size: 1.2rem;
+            color: var(--text-light);
+        }
+        #loading.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div id="loading">로딩 중...</div>
+    
+    <button id="menu-toggle">메뉴</button>
+    
+    <nav id="sidebar">
+        <h1>Global Cache Filter</h1>
+        <div class="subtitle">Envoy HTTP Filter 구현 가이드<br/>C++ for Go/Python/Java Developers</div>
+        
+        <div class="toc-part">Part I. 기반 다지기</div>
+        <div class="toc-item" data-chapter="1">1. Envoy와 Global Cache: 큰 그림</div>
+        <div class="toc-item" data-chapter="2">2. Modern C++ 생존 키트</div>
+        <div class="toc-item" data-chapter="3">3. Envoy 실행 모델</div>
+        
+        <div class="toc-part">Part II. 필터 코어 로직</div>
+        <div class="toc-item" data-chapter="4">4. 캐시 키 설계</div>
+        <div class="toc-item" data-chapter="5">5. decodeHeaders 분석</div>
+        <div class="toc-item" data-chapter="6">6. Single-Flight 구현</div>
+        <div class="toc-item" data-chapter="7">7. 응답 캐싱</div>
+        
+        <div class="toc-part">Part III. 캐시 백엔드</div>
+        <div class="toc-item" data-chapter="8">8. CacheBackend 인터페이스</div>
+        <div class="toc-item" data-chapter="9">9. Local LRU 캐시</div>
+        <div class="toc-item" data-chapter="10">10. Redis 캐시</div>
+        <div class="toc-item" data-chapter="11">11. Tiered 캐시</div>
+        <div class="toc-item" data-chapter="12">12. 직렬화 포맷</div>
+        
+        <div class="toc-part">Part IV. 설정 및 운영</div>
+        <div class="toc-item" data-chapter="13">13. 설정과 팩토리</div>
+        <div class="toc-item" data-chapter="14">14. 관측가능성</div>
+        <div class="toc-item" data-chapter="15">15. 테스트 전략</div>
+        <div class="toc-item" data-chapter="16">16. 트레이드오프</div>
+    </nav>
+    
+    <main id="main">
+        <!-- Chapters will be dynamically inserted here -->
+    </main>
+
+    <script id="markdown-content" type="text/template">
+# Chapter 1. Envoy와 Global Cache: 큰 그림
+
+> **이 장의 목표**: Envoy가 무엇인지, `global_cache` 필터가 왜 필요한지, 그리고 전체 데이터 흐름을 조감도 수준에서 이해합니다.
+
+---
+
+## 1.1 왜 프록시에 캐시를 넣는가?
+
+마이크로서비스 아키텍처에서 가장 흔한 병목은 **반복적인 동일 요청**입니다. 예를 들어:
+
+- 상품 목록 API: 초당 수천 명이 같은 `/api/products?category=electronics`를 호출
+- 사용자 프로필 API: 인기 유저의 프로필을 수백 번 중복 조회
+- 설정 API: 모든 서비스가 부팅할 때 동일한 설정을 요청
+
+프록시 레벨에서 캐싱하면:
+1. **백엔드 부하 감소**: 동일 요청이 백엔드에 도달하지 않음
+2. **응답 지연 감소**: 메모리/Redis에서 바로 응답 (수 밀리초)
+3. **장애 격리**: 백엔드가 잠시 죽어도 캐시된 응답 제공 가능
+
+---
+
+## 1.2 Global Cache 필터의 핵심 기능
+
+### 1) 응답 캐싱 (Response Caching)
+업스트림(백엔드)에서 받은 응답을 저장하고, 이후 동일한 요청에 대해 저장된 응답을 반환합니다.
+
+```yaml
+# 설정 예시
+- name: envoy.filters.http.global_cache
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.global_cache.v3.GlobalCache
+    default_ttl: { seconds: 300 }  # 5분간 캐시
+    cache_backend:
+      local:
+        max_entries: 10000
+```
+
+### 2) Single-Flight (요청 합류)
+**더 중요한 기능**입니다. 동일한 URL로 동시에 100개의 요청이 오면:
+
+- **Without Single-Flight**: 100개 모두 백엔드로 전달 → 백엔드 과부하
+- **With Single-Flight**: 1개만 백엔드로, 나머지 99개는 대기 → 결과 공유
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client 1
+    participant C2 as Client 2
+    participant E as Envoy (global_cache)
+    participant B as Backend
+
+    C1->>E: GET /products (MISS)
+    Note over E: 첫 요청, 내가 간다
+    E->>B: GET /products
+    
+    C2->>E: GET /products
+    Note over E: 이미 요청 중, 대기
+    
+    B-->>E: Response 200
+    Note over E: 캐시 저장
+    
+    E-->>C1: Response (x-cache: MISS)
+    E-->>C2: Response (x-cache: HIT-COALESCED)
+```
+
+Go 개발자라면 `golang.org/x/sync/singleflight` 패키지를 떠올리면 됩니다. 개념적으로 **완전히 동일**합니다.
+
+---
+
+## 1.3 Go 코드로 보는 동등한 로직
+
+```go
+package main
+
+import (
+    "net/http"
+    "sync"
+    "time"
+    "golang.org/x/sync/singleflight"
+)
+
+// 캐시 엔트리
+type CacheEntry struct {
+    Headers    http.Header
+    Body       []byte
+    Expiration time.Time
+}
+
+// 전역 캐시와 singleflight 그룹
+var (
+    cache        = make(map[string]*CacheEntry)
+    cacheMutex   sync.RWMutex
+    group        singleflight.Group
+    defaultTTL   = 5 * time.Minute
+)
+
+// 미들웨어
+func CacheMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // 1. 캐시 키 생성
+        key := r.Method + ":" + r.Host + ":" + r.URL.Path
+        
+        // 2. 캐시 조회
+        cacheMutex.RLock()
+        entry, exists := cache[key]
+        cacheMutex.RUnlock()
+        
+        if exists && time.Now().Before(entry.Expiration) {
+            // 캐시 HIT
+            w.Header().Set("X-Cache", "HIT")
+            w.Write(entry.Body)
+            return
+        }
+        
+        // 3. Single-flight: 중복 요청 방지
+        result, _, shared := group.Do(key, func() (interface{}, error) {
+            // 실제 백엔드 호출
+            return callUpstream(r)
+        })
+        
+        // 4. 응답 전송
+        entry = result.(*CacheEntry)
+        if shared {
+            w.Header().Set("X-Cache", "HIT-COALESCED")
+        } else {
+            w.Header().Set("X-Cache", "MISS")
+        }
+        w.Write(entry.Body)
+    })
+}
+```
+
+**핵심 포인트:**
+- `singleflight.Group.Do()`: 동일 키에 대해 하나의 요청만 실행
+- `shared` 플래그: 다른 요청과 결과를 공유했는지 여부
+- `X-Cache` 헤더: HIT / MISS / HIT-COALESCED 상태 표시
+
+---
+
+## 1.4 전체 데이터 흐름 개요
+
+```mermaid
+flowchart TD
+    subgraph Request["요청 흐름 (Decode Path)"]
+        A[클라이언트 요청] --> B{캐시 조회}
+        B -->|HIT| C[캐시된 응답 반환]
+        B -->|MISS| D{동일 키 요청 진행 중?}
+        D -->|Yes| E[대기 목록에 추가]
+        D -->|No| F[업스트림으로 전달]
+    end
+    
+    subgraph Response["응답 흐름 (Encode Path)"]
+        F --> G[업스트림 응답 수신]
+        G --> H{캐시 가능?}
+        H -->|Yes| I[캐시에 저장]
+        H -->|No| J[저장하지 않음]
+        I --> K[대기자들에게 통지]
+        K --> L[응답 전송]
+    end
+```
+
+---
+
+## 1.5 파일 구조 미리보기
+
+```
+source/extensions/filters/http/global_cache/
+├── global_cache_filter.h   # 필터 클래스 선언
+├── global_cache_filter.cc  # 필터 핵심 로직 (~600줄)
+├── cache_backend.h         # 캐시 인터페이스 정의
+├── local_cache.h/cc        # 로컬 LRU 캐시 구현
+├── redis_cache.h/cc        # Redis 비동기 캐시 구현
+├── tiered_cache.h/cc       # L1+L2 계층형 캐시
+├── cache_serialization.h/cc # Redis용 직렬화 포맷
+├── config.h/cc             # 팩토리 및 설정 로딩
+└── BUILD                   # Bazel 빌드 파일
+```
+
+| 파일 | 역할 | 해당 챕터 |
+|------|------|----------|
+| `global_cache_filter.*` | 요청/응답 처리, Single-flight | 5, 6, 7장 |
+| `cache_backend.h` | 추상 인터페이스 정의 | 8장 |
+| `local_cache.*` | 메모리 LRU 캐시 | 9장 |
+| `redis_cache.*` | Redis 비동기 클라이언트 | 10장 |
+| `tiered_cache.*` | L1+L2 조율 | 11장 |
+| `cache_serialization.*` | 바이너리 직렬화 | 12장 |
+| `config.*` | 설정 파싱, 팩토리 | 13장 |
+
+---
+
+## 1.6 왜 C++인가?
+
+| 특성 | Go/Java | C++ (Envoy) |
+|------|---------|-------------|
+| GC 지연 | 수~수십 ms | 없음 |
+| 메모리 오버헤드 | 객체당 헤더 존재 | 최소화 가능 |
+| Tail Latency (p99) | 불안정 | 예측 가능 |
+| 메모리 사용량 제어 | 제한적 | 바이트 단위 제어 |
+
+---
+
+> **체크리스트**
+> - [ ] `global_cache`의 두 가지 핵심 기능(캐싱, Single-flight)을 설명할 수 있다
+> - [ ] Go 코드로 동등한 로직을 작성할 수 있다
+> - [ ] 필터의 상태 머신을 그릴 수 있다
+> - [ ] Envoy가 C++을 사용하는 이유를 설명할 수 있다
+
+---
+
+# Chapter 2. Modern C++ 생존 키트
+
+> **이 장의 목표**: 이후 장에서 등장하는 C++ 코드를 읽기 위해 필수적인 문법과 개념을 Go/Python/Java와 비교하며 익힙니다.
+
+---
+
+## 2.1 헤더와 소스 분리
+
+C++은 선언(.h)과 구현(.cc)을 분리합니다.
+
+```cpp
+// cache_backend.h - 선언
+#pragma once  // 중복 include 방지
+
+class CacheBackend {
+public:
+    virtual void lookup(const std::string& key) = 0;
+    virtual ~CacheBackend() = default;
+};
+```
+
+```cpp
+// local_cache.cc - 구현
+#include "local_cache.h"
+
+void LocalCache::lookup(const std::string& key) {
+    // 실제 구현...
+}
+```
+
+| 언어 | 선언과 구현 |
+|------|-------------|
+| Go | 같은 `.go` 파일에 함께 |
+| Java | 같은 `.java` 파일에 함께 |
+| C++ | `.h`(선언) + `.cc`(구현) 분리 |
+
+---
+
+## 2.2 스마트 포인터: GC 없이 메모리 관리하기
+
+C++에는 가비지 컬렉터(GC)가 없습니다. 대신 **스마트 포인터**가 메모리를 자동으로 관리합니다.
+
+### std::unique_ptr - 단독 소유
+
+```cpp
+// 생성
+auto node = std::make_unique<LruNode>("key", entry, size);
+
+// 소유권 이전 (복사 불가, 이동만 가능)
+auto node2 = std::move(node);  // node는 이제 nullptr
+
+// 스코프를 벗어나면 자동 삭제
+{
+    auto temp = std::make_unique<MyClass>();
+}  // 여기서 temp가 가리키는 객체 자동 삭제
+```
+
+### std::shared_ptr - 공유 소유
+
+```cpp
+// 생성
+auto entry = std::make_shared<CacheEntry>(body, headers, expiration);
+
+// 복사 가능 (참조 카운트 증가)
+auto entry2 = entry;  // 둘 다 같은 객체를 가리킴
+
+// 참조 카운트 확인
+entry.use_count();  // 2
+```
+
+### std::weak_ptr - 약한 참조
+
+`shared_ptr`를 가리키지만 **참조 카운트를 증가시키지 않습니다**. 순환 참조 방지용입니다.
+
+```cpp
+struct InFlightRequest {
+    std::vector<std::weak_ptr<GlobalCacheFilter>> waiters;  // 약한 참조
+};
+
+// 사용할 때는 lock()으로 shared_ptr로 변환
+if (auto filter = waiter.lock()) {  // 아직 살아있으면
+    filter->onComplete();
+}
+```
+
+| 타입 | Go 비유 | 용도 |
+|------|---------|------|
+| unique_ptr | 단독 소유 포인터 | 한 객체만 소유 |
+| shared_ptr | 일반 포인터 + GC | 여러 곳에서 공유 |
+| weak_ptr | - | 순환 참조 방지 |
+
+---
+
+## 2.3 참조(Reference)와 포인터
+
+```cpp
+// 포인터: null 가능, 재할당 가능
+void modify(int* ptr) {
+    if (ptr != nullptr) *ptr = 42;
+}
+
+// 참조: null 불가, 재할당 불가 (더 안전)
+void modify(int& ref) {
+    ref = 42;
+}
+```
+
+**핵심 차이:**
+- 참조는 **null일 수 없음** (더 안전)
+- 참조는 **재할당 불가** (항상 같은 대상을 가리킴)
+- 참조는 **자동 역참조** (`*`를 안 써도 됨)
+
+---
+
+## 2.4 람다와 캡처 (Lambda & Capture)
+
+```cpp
+int multiplier = 3;
+
+// 값으로 캡처 (복사)
+auto by_value = [multiplier](int x) { return x * multiplier; };
+
+// 참조로 캡처
+auto by_ref = [&multiplier](int x) { return x * multiplier; };
+
+// Envoy에서의 실제 사용
+cache_backend_->lookup(key, [this](CacheLookupResult&& result) {
+    if (result.status == CacheLookupStatus::Hit) {
+        this->serveCachedResponse(result.entry, "HIT");
+    }
+});
+```
+
+**위험한 패턴**: 참조 캡처와 비동기
+
+```cpp
+void dangerous() {
+    std::string key = "test";
+    
+    asyncCall([&key]() {  // key를 참조로 캡처
+        std::cout << key;  // dangerous()가 끝나면 key는 파괴됨!
+    });
+}
+```
+
+---
+
+## 2.5 std::move와 이동 의미론
+
+```cpp
+std::string original = "Hello, World!";
+
+// 복사: 메모리 할당 + 내용 복사
+std::string copy = original;  // original도 여전히 유효
+
+// 이동: 내부 포인터만 옮김 (빠름)
+std::string moved = std::move(original);  // original은 이제 빈 문자열
+```
+
+캐시에 응답을 저장할 때:
+
+```cpp
+// 효율적 (이동)
+auto cached_entry = std::make_shared<CacheEntry>(
+    std::move(buffered_body_),  // 포인터만 이동
+    std::move(response_headers_),
+    expiration
+);
+```
+
+---
+
+## 2.6 RAII: 스코프 기반 자원 관리
+
+**RAII** (Resource Acquisition Is Initialization)는 C++의 핵심 패턴입니다.
+
+```cpp
+{
+    std::lock_guard<std::mutex> lock(mutex_);  // 생성자에서 잠금
+    
+    // 임계 영역 코드...
+    
+}  // 소멸자에서 자동 해제 (예외가 발생해도!)
+```
+
+Go의 `defer`와 유사하지만, **스코프 종료 시 자동 실행**됩니다.
+
+```go
+// Go
+func process() {
+    mu.Lock()
+    defer mu.Unlock()  // 명시적으로 defer 필요
+}
+```
+
+```cpp
+// C++
+void process() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // defer가 필요 없음, 스코프 끝에서 자동 해제
+}
+```
+
+---
+
+## 2.7 C++ ↔ Go/Python/Java 매핑표
+
+| 개념 | C++ | Go | Python | Java |
+|------|-----|-----|--------|------|
+| 널 포인터 | `nullptr` | `nil` | `None` | `null` |
+| 스마트 포인터 | `shared_ptr<T>` | 일반 포인터 + GC | 일반 참조 + GC | 일반 참조 + GC |
+| 참조 전달 | `T&` | 포인터 `*T` | 기본 동작 | 기본 동작 |
+| 불변 참조 | `const T&` | - | - | `final` (부분적) |
+| 람다 | `[capture](params){}` | `func(params){}` | `lambda params:` | `(params) -> {}` |
+| 리소스 정리 | RAII (자동) | `defer` | `with` | try-with-resources |
+| 제네릭 | `template<T>` | `[T any]` | 타입 힌트 | `<T>` |
+| 타입 추론 | `auto` | `:=` | 자동 | `var` |
+
+---
+
+> **체크리스트**
+> - [ ] `unique_ptr`, `shared_ptr`, `weak_ptr`의 차이를 설명할 수 있다
+> - [ ] 참조(`&`)와 포인터(`*`)의 차이를 알고 있다
+> - [ ] 람다 캡처 `[=]`, `[&]`, `[this]`의 의미를 안다
+> - [ ] `std::move`가 왜 필요한지 설명할 수 있다
+> - [ ] RAII 패턴이 무엇인지 안다
+
+---
+
+# Chapter 3. Envoy 실행 모델: 워커, 디스패처, 필터 계약
+
+> **이 장의 목표**: Envoy의 스레딩 모델과 이벤트 루프를 이해하고, 필터가 어떤 규약을 따라야 하는지 배웁니다.
+
+---
+
+## 3.1 스레딩 모델: Java/Go와 완전히 다르다
+
+가장 먼저 깨야 할 고정관념: **"요청 하나당 스레드 하나"**가 아닙니다.
+
+### Envoy의 모델 (Node.js와 유사)
+
+```
+Worker Thread 1: [이벤트 루프]
+    └─ 요청 1 도착 → 처리 시작 → Redis 요청 (콜백 등록) → 다음 이벤트로
+    └─ 요청 2 도착 → 처리 시작 → ...
+    └─ Redis 응답 도착 → 요청 1 콜백 실행 → ...
+```
+
+**핵심 특징:**
+- 스레드 수 = CPU 코어 수 (보통 4~16개)
+- 각 스레드는 **독립적인 이벤트 루프** 실행
+- I/O는 **논블로킹 + 콜백**
+
+---
+
+## 3.2 이벤트 루프: 절대 멈추면 안 된다
+
+```mermaid
+flowchart TB
+    subgraph EventLoop["이벤트 루프 (무한 반복)"]
+        A[이벤트 대기] --> B{이벤트 타입?}
+        B -->|소켓 읽기 가능| C[데이터 읽기]
+        B -->|타이머 만료| D[타이머 콜백 실행]
+        B -->|콜백 예약됨| E[콜백 실행]
+        C --> F[필터 체인 호출]
+        F --> A
+        D --> A
+        E --> A
+    end
+```
+
+### 금지된 코드 패턴
+
+```cpp
+// 절대 금지!
+void badFilter() {
+    std::this_thread::sleep_for(std::chrono::seconds(1));  // 스레드 멈춤
+    read(socket_fd, buffer, sizeof(buffer));  // 블로킹!
+}
+```
+
+### 올바른 비동기 패턴
+
+```cpp
+// 올바른 방법
+void goodFilter() {
+    // 비동기 타이머
+    auto timer = dispatcher_.createTimer([this]() {
+        this->onTimeout();
+    });
+    timer->enableTimer(std::chrono::seconds(1));
+    
+    // 비동기 Redis 요청
+    redis_client_->asyncGet(key, [this](Response&& response) {
+        this->onRedisResponse(std::move(response));
+    });
+}
+```
+
+---
+
+## 3.3 필터 반환 값: 흐름 제어의 핵심
+
+```cpp
+enum class FilterHeadersStatus {
+    Continue,                    // 다음 필터로 진행
+    StopIteration,               // 현재 필터에서 중단 (이후 콜백에서 재개)
+    StopAllIterationAndBuffer,   // 중단 + 데이터 버퍼링
+    StopAllIterationAndWatermark // 중단 + 워터마크 기반 버퍼링
+};
+```
+
+### 실제 사용 예시
+
+```cpp
+FilterHeadersStatus GlobalCacheFilter::decodeHeaders(...) {
+    // 캐시 조회 시작 (비동기)
+    cache_backend_->lookup(key, [this](CacheLookupResult&& result) {
+        if (result.status == CacheLookupStatus::Hit) {
+            serveCachedResponse(result.entry, "HIT");
+        } else {
+            decoder_callbacks_->continueDecoding();
+        }
+    });
+    
+    // 비동기 작업 중이므로 중단
+    return FilterHeadersStatus::StopAllIterationAndWatermark;
+}
+```
+
+---
+
+## 3.4 Thread Local Storage (TLS)
+
+Envoy에서 **워커 간 데이터 공유**는 위험합니다. 대신 **Thread Local Storage**를 사용합니다.
+
+```cpp
+// 각 워커가 독립적인 복사본을 가짐
+thread_local std::unordered_map<std::string, std::shared_ptr<InFlightRequest>>
+    GlobalCacheFilter::in_flight_requests_;
+```
+
+**결과**: 동일 URL 요청이 다른 워커에 도착하면 **각각 독립적으로 in-flight 추적**
+- 장점: Lock-free, 간단
+- 단점: 워커 수만큼 중복 upstream 요청 가능 (보통 2~8개)
+
+---
+
+> **체크리스트**
+> - [ ] Envoy의 스레딩 모델(이벤트 루프 기반)을 설명할 수 있다
+> - [ ] 왜 블로킹이 금지인지 이해한다
+> - [ ] `FilterHeadersStatus`의 각 값이 무엇을 의미하는지 안다
+> - [ ] `continueDecoding()`이 언제 필요한지 안다
+> - [ ] `thread_local`이 왜 사용되는지 설명할 수 있다
+
+---
+
+# Chapter 4. 캐시 키 설계: 정확성의 출발점
+
+> **이 장의 목표**: 캐시 키가 어떻게 생성되는지, 캐시 가능 여부를 어떻게 판단하는지 이해합니다.
+
+---
+
+## 4.1 캐시 키 구성 옵션
+
+```yaml
+cache_key:
+  include_scheme: false        # http vs https
+  include_host: true           # 호스트명
+  include_path: true           # 경로
+  include_query_params: true   # 쿼리 스트링
+  query_params_included: []    # 포함할 쿼리 (allowlist)
+  query_params_excluded: []    # 제외할 쿼리 (blocklist)
+  headers_included: []         # 포함할 헤더
+```
+
+---
+
+## 4.2 쿼리 파라미터 필터링
+
+### Blocklist 방식
+
+```yaml
+cache_key:
+  query_params_excluded: ["utm_source", "debug", "_t"]
+```
+
+```
+요청: GET /search?q=envoy&utm_source=google&_t=1234567890
+키: /search?q=envoy  (utm_source, _t 제외)
+```
+
+---
+
+## 4.3 캐시 가능 여부 판단
+
+```mermaid
+flowchart TD
+    A[요청 도착] --> B{메서드 허용?}
+    B -->|No| X[캐시 안 함]
+    B -->|Yes| C[키 생성, 캐시 조회]
+    
+    C --> D{캐시 HIT?}
+    D -->|Yes| E[캐시된 응답 반환]
+    D -->|No| F[업스트림 요청]
+    
+    F --> G[응답 수신]
+    G --> H{상태 코드 허용?}
+    H -->|No| X
+    H -->|Yes| I{Set-Cookie 있음?}
+    
+    I -->|Yes, skip 설정| X
+    I -->|No 또는 허용| J{Cache-Control 있음?}
+    
+    J -->|Yes, skip 설정| X
+    J -->|No 또는 허용| K{바디 크기 < 1MB?}
+    
+    K -->|No| X
+    K -->|Yes| L[캐시에 저장]
+```
+
+---
+
+## 4.4 라우트별 Override
+
+```yaml
+route_config:
+  virtual_hosts:
+  - name: local_service
+    domains: ["*"]
+    routes:
+    # 캐시 비활성화
+    - match: { prefix: "/api/auth" }
+      typed_per_filter_config:
+        envoy.filters.http.global_cache:
+          "@type": type.googleapis.com/.../GlobalCachePerRoute
+          disabled: true
+          
+    # TTL 변경 + 쿼리 무시
+    - match: { prefix: "/api/static" }
+      typed_per_filter_config:
+        envoy.filters.http.global_cache:
+          "@type": type.googleapis.com/.../GlobalCachePerRoute
+          overrides:
+            default_ttl: { seconds: 3600 }  # 1시간
+            cache_key:
+              include_query_params: false
+```
+
+---
+
+> **체크리스트**
+> - [ ] 캐시 키의 구성 요소를 설명할 수 있다
+> - [ ] `query_params_included`와 `query_params_excluded`의 동작을 이해한다
+> - [ ] 라우트별 override가 어떻게 적용되는지 안다
+
+---
+
+# Chapter 5. decodeHeaders: 요청 처리의 시작점
+
+> **이 장의 목표**: 필터의 핵심 진입점인 `decodeHeaders`를 이해합니다. LocalCache(동기)와 RedisCache(비동기)를 동일한 코드로 처리하는 기법을 배웁니다.
+
+---
+
+## 5.1 전체 코드 흐름
+
+```cpp
+Http::FilterHeadersStatus GlobalCacheFilter::decodeHeaders(...) {
+    // Phase 1: 라우트별 설정 적용
+    // Phase 2: 캐시 가능성 검사
+    // Phase 3: 캐시 키 생성
+    // Phase 4: 비동기 캐시 조회
+    // Phase 5: 반환 값 결정 (동기/비동기 분기)
+}
+```
+
+---
+
+## 5.2 동기/비동기 통합 처리
+
+```cpp
+struct LookupContext {
+    std::atomic<bool> sync{true};
+    std::atomic<bool> invoked{false};
+};
+auto lookup_ctx = std::make_shared<LookupContext>();
+
+cache_backend_->lookup(key, [this, lookup_ctx](CacheLookupResult&& result) {
+    lookup_ctx->invoked.store(true);
+    const bool is_sync = lookup_ctx->sync.load();
+    // ... 결과 처리 ...
+    if (!is_sync) decoder_callbacks_->continueDecoding();
+});
+
+lookup_ctx->sync.store(false);
+
+if (lookup_ctx->invoked.load()) {
+    // 동기 완료 (LocalCache)
+} else {
+    return StopIteration;  // 비동기 대기 (RedisCache)
+}
+```
+
+**왜 이렇게 복잡한가?**
+- LocalCache: 콜백이 **즉시** 실행됨 (동기)
+- RedisCache: 콜백이 **나중에** 실행됨 (비동기)
+- 두 경우를 **동일한 코드**로 처리해야 함
+
+---
+
+> **체크리스트**
+> - [ ] `decodeHeaders`의 5단계를 설명할 수 있다
+> - [ ] 동기/비동기 콜백을 통합 처리하는 패턴을 이해한다
+> - [ ] `StopAllIterationAndWatermark`와 `continueDecoding()`의 관계를 안다
+
+---
+
+# Chapter 6. Single-Flight: 요청 합류의 모든 것
+
+> **이 장의 목표**: Thundering Herd 문제를 해결하는 Single-Flight 패턴의 구현을 이해합니다.
+
+---
+
+## 6.1 핵심 자료구조
+
+```cpp
+struct InFlightRequest {
+    bool completed{false};
+    std::shared_ptr<CacheEntry> result{nullptr};
+    std::vector<std::weak_ptr<GlobalCacheFilter>> waiters;
+};
+
+// 워커 스레드별 독립 저장소
+thread_local std::unordered_map<std::string, std::shared_ptr<InFlightRequest>>
+    GlobalCacheFilter::in_flight_requests_;
+```
+
+---
+
+## 6.2 waiters에 weak_ptr를 쓰는 이유
+
+**순환 참조 방지**: Filter가 파괴되어도 InFlightRequest가 참조하면 메모리 누수 발생
+
+```cpp
+// 대기자 등록
+std::weak_ptr<GlobalCacheFilter> weak_self = shared_from_this();
+it->second->waiters.push_back(std::move(weak_self));
+
+// 통지 시
+for (const auto& waiter : waiters) {
+    if (auto filter = waiter.lock()) {  // 아직 살아있으면
+        filter->onInFlightComplete(entry);
+    }
+}
+```
+
+---
+
+## 6.3 타임아웃 처리
+
+```cpp
+void GlobalCacheFilter::onSingleFlightTimeout() {
+    if (!waiting_for_in_flight_) return;
+    
+    waiting_for_in_flight_ = false;
+    state_ = FilterState::CacheMiss;
+    decoder_callbacks_->continueDecoding();  // 직접 upstream으로
+}
+```
+
+---
+
+> **체크리스트**
+> - [ ] Single-flight가 Thundering Herd를 해결하는 방법을 안다
+> - [ ] `weak_ptr`가 왜 필요한지 설명할 수 있다
+> - [ ] 타임아웃 처리 흐름을 이해한다
+
+---
+
+# Chapter 7. encodeHeaders/encodeData: 응답 캐싱
+
+> **이 장의 목표**: 업스트림 응답을 버퍼링하고 캐시에 저장하는 과정을 이해합니다.
+
+---
+
+## 7.1 응답 처리 흐름
+
+```mermaid
+sequenceDiagram
+    participant U as Upstream
+    participant F as Filter
+    participant C as Cache
+
+    U->>F: Response Headers
+    F->>F: 캐시 가능성 검사
+    U->>F: Body chunk 1
+    F->>F: 버퍼에 추가
+    U->>F: Body chunk 2 (end)
+    F->>C: insert(key, entry)
+    F->>F: 대기자 통지
+```
+
+---
+
+## 7.2 메모리 제한: 1MB
+
+```cpp
+static constexpr size_t kMaxCachedResponseBytes = 1024 * 1024;
+
+if (buffered_body_.length() + data.length() > kMaxCachedResponseBytes) {
+    cacheable_response_ = false;
+    buffered_body_.drain(buffered_body_.length());  // 버퍼 비우기
+    notifyInFlightWaiters(in_flight_key_, nullptr);  // 실패 통지
+}
+```
+
+---
+
+## 7.3 x-cache 헤더
+
+| 값 | 의미 |
+|----|------|
+| `HIT` | 캐시에서 제공됨 |
+| `HIT-COALESCED` | Single-flight로 공유됨 |
+| `MISS` | 업스트림에서 가져와서 캐시됨 |
+
+---
+
+> **체크리스트**
+> - [ ] `encodeHeaders`/`encodeData`의 역할을 설명할 수 있다
+> - [ ] 1MB 제한의 이유를 안다
+> - [ ] `x-cache` 헤더의 세 가지 값을 구분할 수 있다
+
+---
+
+# Chapter 8. CacheBackend 인터페이스: 추상화의 힘
+
+> **이 장의 목표**: 캐시 백엔드 추상화 인터페이스를 이해하고, C++ 다형성을 배웁니다.
+
+---
+
+## 8.1 인터페이스 정의
+
+```cpp
+class CacheBackend {
+public:
+    virtual ~CacheBackend() = default;
+    
+    using LookupCallback = std::function<void(CacheLookupResult&&)>;
+    using InsertCallback = std::function<void(bool success)>;
+    
+    virtual void lookup(const std::string& key, LookupCallback callback) PURE;
+    virtual void insert(const std::string& key, 
+                       std::shared_ptr<CacheEntry> entry,
+                       std::chrono::seconds ttl, 
+                       InsertCallback callback) PURE;
+    virtual void remove(const std::string& key) PURE;
+    virtual std::string name() const PURE;
+};
+```
+
+---
+
+## 8.2 콜백 계약
+
+- 콜백은 **반드시 한 번** 호출
+- 에러도 콜백으로 전달 (예외 금지)
+
+---
+
+## 8.3 백엔드 비교
+
+| 특성 | LocalCache | RedisCache | TieredCache |
+|------|------------|------------|-------------|
+| 저장 위치 | 메모리 | Redis 서버 | L1+L2 |
+| 동기/비동기 | 동기 | 비동기 | 혼합 |
+| 지연시간 | ~1μs | ~1ms | L1: μs |
+
+---
+
+> **체크리스트**
+> - [ ] `CacheBackend` 인터페이스의 메서드를 설명할 수 있다
+> - [ ] `virtual`, `PURE`, `override`의 의미를 안다
+> - [ ] 콜백 계약을 이해한다
+
+---
+
+# Chapter 9. Local LRU 캐시: 메모리 자료구조의 정석
+
+> **이 장의 목표**: O(1) LRU 캐시 구현을 이해합니다.
+
+---
+
+## 9.1 자료구조: 해시맵 + 이중 연결 리스트
+
+```mermaid
+graph LR
+    subgraph HashMap
+        K1[key1] --> N1
+        K2[key2] --> N2
+    end
+    subgraph LinkedList
+        N1[Node 1] <--> N2[Node 2]
+    end
+```
+
+---
+
+## 9.2 핵심 연산
+
+```cpp
+void LocalCache::lookup(const std::string& key, LookupCallback callback) {
+    {
+        absl::MutexLock lock(&mutex_);
+        auto it = cache_.find(key);
+        if (it != cache_.end() && !isExpired(*it->second->entry)) {
+            moveToFront(it->second.get());  // MRU로 이동
+            entry = it->second->entry;
+        }
+    }  // mutex 해제
+    callback(CacheLookupResult{status, entry});  // 콜백은 mutex 밖에서!
+}
+```
+
+---
+
+## 9.3 Eviction
+
+```cpp
+void LocalCache::evictIfNeeded() {
+    while ((current_entries_ > max_entries_ || 
+            current_bytes_ > max_bytes_) && tail_) {
+        LruNode* victim = tail_;
+        cache_.erase(victim->key);
+        removeNode(victim);
+    }
+}
+```
+
+---
+
+> **체크리스트**
+> - [ ] LRU가 해시맵 + 이중 연결 리스트로 구현되는 이유를 안다
+> - [ ] 콜백을 mutex 외부에서 호출해야 하는 이유를 안다
+
+---
+
+# Chapter 10. Redis 캐시: 비동기 네트워크의 세계
+
+> **이 장의 목표**: Envoy Redis 클라이언트를 사용한 비동기 캐시 구현을 이해합니다.
+
+---
+
+## 10.1 Redis 명령어 매핑
+
+| 연산 | Redis 명령 |
+|------|------------|
+| lookup | GET key |
+| insert | SETEX key ttl value |
+| remove | DEL key |
+
+---
+
+## 10.2 dispatcher.post()가 필요한 이유
+
+Redis 응답이 다른 스레드에서 올 수 있음 → 원래 워커 스레드에서 콜백 실행 보장
+
+```cpp
+void onResponse(RespValuePtr&& value) {
+    dispatcher_.post([self, entry]() mutable {
+        self->callback_(CacheLookupResult{CacheLookupStatus::Hit, entry});
+    });
+}
+```
+
+---
+
+> **체크리스트**
+> - [ ] Redis GET/SETEX 요청 구성을 안다
+> - [ ] `dispatcher.post()`가 왜 필요한지 설명할 수 있다
+
+---
+
+# Chapter 11. Tiered 캐시: 로컬과 리모트의 조화
+
+> **이 장의 목표**: L1(로컬)과 L2(리모트) 캐시를 조합한 계층형 캐시의 구현 원리를 이해합니다.
+
+---
+
+## 11.1 왜 계층형 캐시인가?
+
+| 특성 | LocalCache (L1) | RedisCache (L2) | TieredCache |
+|------|-----------------|-----------------|-------------|
+| 지연시간 | ~1μs | ~1ms | L1 히트시 ~1μs |
+| 용량 | 작음 (MB) | 큼 (GB) | L1 속도 + L2 용량 |
+| 공유 | 워커 내 | 클러스터 전체 | 혼합 |
+
+---
+
+## 11.2 Lookup 흐름
+
+```mermaid
+sequenceDiagram
+    participant F as Filter
+    participant T as TieredCache
+    participant L1 as LocalCache
+    participant L2 as RedisCache
+
+    F->>T: lookup(key)
+    T->>L1: lookup(key)
+    alt L1 Hit
+        L1-->>T: Hit
+        T-->>F: Hit
+    else L1 Miss
+        L1-->>T: Miss
+        T->>L2: lookup(key)
+        alt L2 Hit
+            L2-->>T: Hit
+            T->>L1: populate L1
+            T-->>F: Hit
+        else L2 Miss
+            L2-->>T: Miss
+            T-->>F: Miss
+        end
+    end
+```
+
+---
+
+## 11.3 Write 전략
+
+| 전략 | 동작 | 특징 |
+|------|------|------|
+| WRITE_THROUGH | L1+L2 모두 완료 대기 | 일관성 높음, 느림 |
+| WRITE_BACK | L1만 완료, L2는 비동기 | 빠름, 유실 가능 |
+
+---
+
+> **체크리스트**
+> - [ ] L1과 L2의 역할 분담을 이해했다
+> - [ ] WRITE_THROUGH와 WRITE_BACK의 장단점을 안다
+
+---
+
+# Chapter 12. 직렬화: 바이너리의 세계로
+
+> **이 장의 목표**: CacheEntry를 Redis에 저장하기 위한 바이너리 직렬화 과정을 이해합니다.
+
+---
+
+## 12.1 바이너리 포맷
+
+```
+[4B Magic "GC01"]
+[8B Remaining TTL (ms)]
+[4B Num Headers]
+[Headers: (4B key_len)(key)(4B val_len)(val)...]
+[8B Body Length]
+[Body Data]
+```
+
+---
+
+## 12.2 Network Byte Order
+
+```cpp
+void CacheSerializer::writeUint32(std::string& buffer, uint32_t value) {
+    uint32_t network_value = htonl(value);  // Big Endian으로 변환
+    buffer.append(reinterpret_cast<const char*>(&network_value), 4);
+}
+```
+
+---
+
+## 12.3 방어적 프로그래밍
+
+- Bounds Checking: 읽기 전 크기 확인
+- Magic Number: 포맷 검증
+- No-Panic: 파싱 실패시 nullptr 반환
+
+---
+
+> **체크리스트**
+> - [ ] 바이너리 포맷 구조를 설명할 수 있다
+> - [ ] `htonl`/`ntohl`이 왜 필요한지 안다
+
+---
+
+# Chapter 13. 설정과 팩토리: Envoy 필터 등록의 비밀
+
+> **이 장의 목표**: Envoy 필터가 설정에서 어떻게 생성되는지 이해합니다.
+
+---
+
+## 13.1 팩토리 패턴
+
+```cpp
+class GlobalCacheFilterFactory : public Common::DualFactoryBase<...> {
+public:
+    GlobalCacheFilterFactory() : DualFactoryBase("envoy.filters.http.global_cache") {}
+
+private:
+    absl::StatusOr<Http::FilterFactoryCb> createFilterFactoryFromProtoTyped(...) {
+        auto cache_backend = createCacheBackend(proto_config, context);
+        auto filter_config = std::make_shared<GlobalCacheFilterConfig>(...);
+        
+        return [filter_config](Http::FilterChainFactoryCallbacks& callbacks) {
+            callbacks.addStreamFilter(
+                std::make_shared<GlobalCacheFilter>(filter_config));
+        };
+    }
+};
+```
+
+---
+
+## 13.2 REGISTER_FACTORY 매크로
+
+```cpp
+REGISTER_FACTORY(GlobalCacheFilterFactory, 
+                 Server::Configuration::NamedHttpFilterConfigFactory);
+```
+
+Envoy 시작시 자동으로 팩토리 등록
+
+---
+
+> **체크리스트**
+> - [ ] 팩토리 패턴의 역할을 설명할 수 있다
+> - [ ] REGISTER_FACTORY 매크로의 동작을 이해한다
+
+---
+
+# Chapter 14. 관측가능성: 로깅과 디버깅
+
+> **이 장의 목표**: Global Cache 필터의 로깅과 디버깅 방법을 배웁니다.
+
+---
+
+## 14.1 Envoy 로깅 시스템
+
+```cpp
+class GlobalCacheFilter : public Logger::Loggable<Logger::Id::filter> {
+    void decodeHeaders(...) {
+        ENVOY_LOG(debug, "global_cache: lookup for key: {}", cache_key_);
+        ENVOY_LOG(info, "global_cache: cache {} for key: {}", 
+                  status == Hit ? "HIT" : "MISS", cache_key_);
+    }
+};
+```
+
+---
+
+## 14.2 디버깅 시나리오
+
+| 문제 | 확인 사항 |
+|------|----------|
+| 캐시 미작동 | allowed_methods, allowed_status_codes 확인 |
+| Single-flight 미작동 | --concurrency 설정, 타임아웃 확인 |
+| Redis 연결 실패 | cluster_name, 헬스체크 설정 확인 |
+
+---
+
+> **체크리스트**
+> - [ ] ENVOY_LOG 매크로 사용법을 안다
+> - [ ] x-cache 헤더로 캐시 상태를 확인할 수 있다
+
+---
+
+# Chapter 15. 테스트와 품질 보증
+
+> **이 장의 목표**: Envoy 테스트 프레임워크와 Global Cache 테스트 전략을 이해합니다.
+
+---
+
+## 15.1 Google Test 기초
+
+```cpp
+TEST(LocalCacheTest, InsertAndLookup) {
+    LocalCache cache(config);
+    auto entry = createTestEntry();
+    
+    cache.insert("key", entry, std::chrono::seconds(60), [](bool ok) {
+        EXPECT_TRUE(ok);
+    });
+    
+    cache.lookup("key", [&entry](CacheLookupResult&& result) {
+        EXPECT_EQ(result.status, CacheLookupStatus::Hit);
+        EXPECT_EQ(result.entry->body.length(), entry->body.length());
+    });
+}
+```
+
+---
+
+## 15.2 테스트 종류
+
+| 테스트 | 파일 | 범위 |
+|--------|------|------|
+| LocalCache | local_cache_test.cc | LRU, TTL, eviction |
+| RedisCache | redis_cache_test.cc | 비동기, 타임아웃 |
+| TieredCache | tiered_cache_test.cc | L1/L2 조합 |
+| Filter | global_cache_filter_test.cc | 통합 |
+
+---
+
+> **체크리스트**
+> - [ ] Google Test 기본 문법을 안다
+> - [ ] 각 테스트 파일의 역할을 이해한다
+
+---
+
+# Chapter 16. 설계 트레이드오프와 운영 고려사항
+
+> **이 장의 목표**: Global Cache 필터의 설계 결정과 운영 시 주의사항을 이해합니다.
+
+---
+
+## 16.1 주요 트레이드오프
+
+| 결정 | 장점 | 단점 |
+|------|------|------|
+| 워커별 TLS | Lock-free | 워커 수만큼 중복 요청 |
+| 1MB 제한 | 메모리 보호 | 대용량 응답 캐시 불가 |
+| TTL 단순화 | 운영 단순 | RFC 미준수 |
+| Set-Cookie 스킵 | 보안 | 일부 응답 캐시 불가 |
+
+---
+
+## 16.2 Redis 장애 시 행동
+
+**Graceful Degradation**: Redis 실패 = Cache Miss로 처리
+
+```cpp
+void RedisCache::LookupRequest::onFailure() {
+    ENVOY_LOG(warn, "Redis failed, bypassing cache");
+    callback_(CacheLookupResult{CacheLookupStatus::Miss});
+}
+```
+
+---
+
+## 16.3 프로덕션 체크리스트
+
+- 메모리 할당 검증 (max_bytes)
+- Redis 헬스체크 설정
+- Single-flight 타임아웃 튜닝
+- Set-Cookie/Authorization 응답 캐시 여부 확인
+- 캐시 키 가변성 검토
+
+---
+
+## 16.4 보안 고려사항
+
+- **Cache Poisoning**: 신뢰할 수 없는 헤더를 키에서 제외
+- **Timing Attacks**: 민감 정보는 캐시하지 않음
+
+---
+
+> **체크리스트**
+> - [ ] 워커별 TLS의 장단점을 설명할 수 있다
+> - [ ] Redis 장애 시 행동을 이해한다
+> - [ ] 프로덕션 배포 전 확인 사항을 안다
+
+---
+
+## 축하합니다!
+
+Global Cache 구현 해설서 전 과정을 마치셨습니다. 이 지식이 여러분의 엔지니어링 여정에 큰 힘이 되기를 바랍니다.
+
+---
+    </script>
+    
+    <script>
+        // Configuration
+        const chapterTitles = {
+            1: "Envoy와 Global Cache: 큰 그림",
+            2: "Modern C++ 생존 키트",
+            3: "Envoy 실행 모델",
+            4: "캐시 키 설계",
+            5: "decodeHeaders 분석",
+            6: "Single-Flight 구현",
+            7: "응답 캐싱",
+            8: "CacheBackend 인터페이스",
+            9: "Local LRU 캐시",
+            10: "Redis 캐시",
+            11: "Tiered 캐시",
+            12: "직렬화 포맷",
+            13: "설정과 팩토리",
+            14: "관측가능성",
+            15: "테스트 전략",
+            16: "트레이드오프"
+        };
+
+        let chapters = {};
+        let currentChapter = 1;
+
+        // Parse markdown content into chapters
+        function parseChapters(markdown) {
+            const chapterRegex = /^# Chapter (\d+)\./gm;
+            const parts = markdown.split(chapterRegex);
+            
+            for (let i = 1; i < parts.length; i += 2) {
+                const chapterNum = parseInt(parts[i]);
+                const content = "# Chapter " + parts[i] + "." + parts[i + 1];
+                chapters[chapterNum] = content;
+            }
+        }
+
+        // Render markdown to HTML
+        function renderChapter(num) {
+            if (!chapters[num]) return '';
+            
+            // Configure marked
+            marked.setOptions({
+                highlight: function(code, lang) {
+                    if (lang && hljs.getLanguage(lang)) {
+                        return hljs.highlight(code, { language: lang }).value;
+                    }
+                    return hljs.highlightAuto(code).value;
+                },
+                breaks: false,
+                gfm: true
+            });
+            
+            let html = marked.parse(chapters[num]);
+            
+            // Process mermaid blocks
+            html = html.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, 
+                '<div class="mermaid">$1</div>');
+            
+            // Add navigation buttons
+            const prevDisabled = num <= 1 ? 'disabled' : '';
+            const nextDisabled = num >= 16 ? 'disabled' : '';
+            
+            html += `
+                <div class="nav-buttons">
+                    <button class="nav-btn ${prevDisabled}" onclick="goToChapter(${num - 1})">
+                        이전: ${num > 1 ? chapterTitles[num - 1] : ''}
+                    </button>
+                    <button class="nav-btn ${nextDisabled}" onclick="goToChapter(${num + 1})">
+                        다음: ${num < 16 ? chapterTitles[num + 1] : ''}
+                    </button>
+                </div>
+            `;
+            
+            return html;
+        }
+
+        // Go to specific chapter
+        function goToChapter(num) {
+            if (num < 1 || num > 16) return;
+            
+            currentChapter = num;
+            
+            // Update active TOC item
+            document.querySelectorAll('.toc-item').forEach(item => {
+                item.classList.remove('active');
+                if (parseInt(item.dataset.chapter) === num) {
+                    item.classList.add('active');
+                }
+            });
+            
+            // Render chapter
+            const main = document.getElementById('main');
+            main.innerHTML = `<div class="chapter active">${renderChapter(num)}</div>`;
+            
+            // Render mermaid diagrams
+            if (window.mermaid) {
+                window.mermaid.run();
+            }
+            
+            // Scroll to top
+            window.scrollTo(0, 0);
+            
+            // Close mobile menu
+            document.getElementById('sidebar').classList.remove('open');
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            // Parse markdown
+            const markdown = document.getElementById('markdown-content').textContent;
+            parseChapters(markdown);
+            
+            // Setup TOC click handlers
+            document.querySelectorAll('.toc-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    goToChapter(parseInt(item.dataset.chapter));
+                });
+            });
+            
+            // Setup mobile menu toggle
+            document.getElementById('menu-toggle').addEventListener('click', () => {
+                document.getElementById('sidebar').classList.toggle('open');
+            });
+            
+            // Load first chapter
+            goToChapter(1);
+            
+            // Hide loading
+            document.getElementById('loading').classList.add('hidden');
+        });
+    </script>
+</body>
+</html>
